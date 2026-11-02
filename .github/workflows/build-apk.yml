@@ -2,6 +2,8 @@ name: Build SaliBussiness APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
 
 permissions:
   contents: write
@@ -31,8 +33,11 @@ jobs:
       - name: Generate Gradle wrapper
         run: gradle wrapper --gradle-version 8.9
 
-      - name: Build debug APK (installable fallback)
-        run: ./gradlew assembleDebug
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build debug APK (installable)
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Build release APK (signed if secrets configured)
         env:
@@ -43,16 +48,18 @@ jobs:
         run: |
           if [ -n "$SALI_KEYSTORE_BASE64" ]; then
             echo "$SALI_KEYSTORE_BASE64" | base64 -d > sali.keystore
-            ./gradlew assembleRelease \
+            ./gradlew assembleRelease --stacktrace \
               -Pandroid.injected.signing.storeFile="$PWD/sali.keystore" \
               -Pandroid.injected.signing.storePassword="$SALI_KEYSTORE_PASSWORD" \
               -Pandroid.injected.signing.keyAlias="$SALI_KEY_ALIAS" \
               -Pandroid.injected.signing.keyPassword="$SALI_KEY_PASSWORD"
             cp app/build/outputs/apk/release/app-release.apk SaliBussiness.apk
           else
-            echo "No signing secrets - building unsigned release only"
-            ./gradlew assembleRelease || true
-            [ -f app/build/outputs/apk/release/app-release-unsigned.apk ] && cp app/build/outputs/apk/release/app-release-unsigned.apk SaliBussiness-unsigned.apk || true
+            echo "No signing secrets - skipping signed release (debug APK is installable)"
+            ./gradlew assembleRelease --stacktrace || true
+            if [ -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
+              cp app/build/outputs/apk/release/app-release-unsigned.apk SaliBussiness-unsigned.apk
+            fi
           fi
 
       - name: Collect artifacts
@@ -67,6 +74,7 @@ jobs:
           path: |
             SaliBussiness.apk
             SaliBussiness-debug.apk
+            SaliBussiness-unsigned.apk
           if-no-files-found: error
           retention-days: 60
 
@@ -78,4 +86,5 @@ jobs:
           files: |
             SaliBussiness.apk
             SaliBussiness-debug.apk
+            SaliBussiness-unsigned.apk
           make_latest: true
