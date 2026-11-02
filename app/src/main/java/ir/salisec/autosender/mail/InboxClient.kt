@@ -9,7 +9,7 @@ import javax.mail.Session
 import javax.mail.internet.MimeMessage
 
 data class InboxMessage(
-    val index: Int,
+    val position: Int,
     val from: String,
     val subject: String,
     val date: Long,
@@ -32,22 +32,24 @@ class InboxClient {
         val store = session(s).getStore("imaps")
         store.connect(s.imapHost, s.imapUser, s.imapPass)
         try {
-            val folder = store.getFolder("INBOX") as javax.mail.Folder
+            val folder = store.getFolder("INBOX")
             folder.open(Folder.READ_ONLY)
             try {
                 val total = folder.messageCount
                 val from = maxOf(1, total - limit + 1)
-                val msgs = (from..total).map { folder.getMessage(it) }
-                msgs.mapIndexed { i, m ->
-                    val body = bodyText(m as MimeMessage)
-                    InboxMessage(
-                        index = total - (from + i) + 1 - (from + i) + (from + i), // placeholder replaced below
+                val out = mutableListOf<InboxMessage>()
+                for (i in total downTo from) {
+                    val m = folder.getMessage(i) as MimeMessage
+                    val body = bodyText(m)
+                    out.add(InboxMessage(
+                        position = total - i,
                         from = (m.from?.firstOrNull()?.toString() ?: ""),
                         subject = m.subject ?: "",
                         date = m.sentDate?.time ?: 0L,
                         preview = body.replace("\s+".toRegex(), " ").take(90)
-                    )
+                    ))
                 }
+                out
             } finally { folder.close(false) }
         } finally { store.close() }
     }
@@ -82,7 +84,6 @@ class InboxClient {
                 val mp = part.content as javax.mail.Multipart
                 for (i in 0 until mp.count) walkParts(mp.getBodyPart(i), sb)
             } else if (part.isMimeType("text/html")) {
-                // strip tags roughly
                 sb.append((part.content?.toString() ?: "").replace(Regex("<[^>]*>"), " "))
             }
         } catch (e: Exception) { /* skip part */ }

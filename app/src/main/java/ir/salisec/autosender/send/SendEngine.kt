@@ -59,7 +59,7 @@ class SendEngine(
 
                 val settings = prefs.load()
                 if (sentToday >= settings.dailyCap) {
-                    log(msg, ok = false, "سقف روزانه رسیده است - فردا ادامه دهید")
+                    log(msg, false, "سقف روزانه رسیده است - فردا ادامه دهید")
                     break
                 }
 
@@ -68,8 +68,8 @@ class SendEngine(
 
                 val attachments = msg.pdfPaths.split("||").filter { it.isNotBlank() }.mapNotNull { path ->
                     try {
-                        val name = path.substringAfterLast('/')
-                        name.removePrefix("raw:") to readBytes(appContext, path)
+                        val name = path.substringAfterLast('/').removePrefix("raw:")
+                        name to readBytes(appContext, path)
                     } catch (e: Exception) { null }
                 }
 
@@ -93,18 +93,14 @@ class SendEngine(
                         log(msg, false, "ناموفق: " + (e.message?.take(120) ?: ""))
                     } else {
                         db.messageDao().update(msg.copy(status = "QUEUED", attempts = attempts, lastError = e.message?.take(200)))
-                        log(msg, false, "تلاش " + attempts + " ناموفق، بعداً دوباره")
+                        log(msg, false, "تلاش " + attempts + " ناموفق، دوباره تلاش می‌شود")
                     }
                 }
-                _state.value = _state.value.copy(
-                    sent = db.messageDao().all().count { it.status == "SENT" && !it.isFollowUp },
-                    sentToday = sentToday
-                )
+                _state.value = _state.value.copy(sentToday = sentToday)
 
-                // pacing between messages
                 val next = db.messageDao().nextQueued()
                 if (next != null && !cancelRequested) {
-                    val delayMs = (settings.delaySeconds + (0..settings.jitterSeconds).random()) * 1000L
+                    val delayMs = (settings.delaySeconds + (0..maxOf(0, settings.jitterSeconds)).random()) * 1000L
                     _state.value = _state.value.copy(waitingUntil = System.currentTimeMillis() + delayMs)
                     var waited = 0L
                     while (waited < delayMs && !cancelRequested) {
