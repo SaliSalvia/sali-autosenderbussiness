@@ -10,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.documentfile.provider.DocumentFile
 import ir.salisec.autosender.App
@@ -32,7 +33,8 @@ fun DomainsScreen(app: App, onBack: () -> Unit, onNext: () -> Unit) {
         Title("۱. ورود دامنه‌ها")
         SubTitle("دامنه‌ها را با فاصله یا خط جدید وارد کنید (۲ تا ۲۰۰ دامنه)")
         LabeledField("دامنه‌ها", raw, multiline = true) { raw = it }
-        Text(if (valid.isEmpty()) "۰ دامنه معتبر" else valid.size.toString() + " دامنه معتبر" + (if (invalid.isEmpty()) "" else " | " + invalid.size.toString() + " نامعتبر/تکراری"))
+        Text(if (valid.isEmpty()) "۰ دامنه معتبر"
+        else valid.size.toString() + " دامنه معتبر" + (if (invalid.isEmpty()) "" else " | " + invalid.size.toString() + " نامعتبر/تکراری"))
         if (invalid.isNotEmpty()) SubTitle("نامعتبر: " + invalid.take(5).joinToString("، "))
         BigButton("ادامه ← مخاطبان", enabled = valid.size >= 2) {
             app.session.domains.value = valid
@@ -50,7 +52,9 @@ fun ContactsScreen(app: App, onBack: () -> Unit, onNext: () -> Unit) {
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            raw = context.contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() }
+            raw = try {
+                context.contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() }
+            } catch (e: Exception) { "" }
         }
     }
 
@@ -78,7 +82,6 @@ fun ReportsScreen(app: App, onBack: () -> Unit, onNext: () -> Unit) {
     var folderSet by remember { mutableStateOf(app.prefs.load().sitestFolderUri.isNotBlank()) }
     val matches by app.session.matches.collectAsState()
     val selected by app.session.selected.collectAsState()
-    val contacts by app.session.contacts.collectAsState()
 
     val treePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -92,18 +95,20 @@ fun ReportsScreen(app: App, onBack: () -> Unit, onNext: () -> Unit) {
     fun doScan() {
         scanning = true
         scope.launch {
-            val root = DocumentFile.fromTreeUri(context, android.net.Uri.parse(app.prefs.load().sitestFolderUri))
+            val uriStr = app.prefs.load().sitestFolderUri
+            val root = DocumentFile.fromTreeUri(context, android.net.Uri.parse(uriStr))
             val result = withContext(Dispatchers.IO) {
                 app.session.domains.value.map { d ->
                     val folder = if (root != null) ReportReader.findFolder(root, d) else null
                     val pdfs = if (folder != null) ReportReader.pdfsIn(folder).map { it.uri.toString() } else emptyList()
                     val report = if (folder != null) ReportReader.readReport(context, d, folder) else null
                     DomainMatch(domain = d, folderName = folder?.name, pdfFiles = pdfs, report = report,
-                        hasEmail = contacts.containsKey(d))
+                        hasEmail = app.session.contacts.value.containsKey(d))
                 }
             }
             app.session.matches.value = result
-            app.session.selected.value = result.filter { it.folderName != null && it.pdfFiles.isNotEmpty() && it.hasEmail }
+            app.session.selected.value = result
+                .filter { it.folderName != null && it.pdfFiles.isNotEmpty() && it.hasEmail }
                 .map { it.domain }.toSet()
             scanning = false
         }
@@ -117,12 +122,15 @@ fun ReportsScreen(app: App, onBack: () -> Unit, onNext: () -> Unit) {
             SubTitle("پوشه‌ی sitest را انتخاب کن (جایی که پوشه‌ی هر دامنه و PDFهای آن است)")
             BigButton("انتخاب پوشه sitest") { treePicker.launch(null) }
         } else {
-            TextButton(onClick = { treePicker.launch(null) }) { Text("تغییر پوشه") }
-            if (scanning) LoadingBox("در حال اسکن پوشه‌ها...")
-            if (!scanning && matches.isNotEmpty()) {
+            if (scanning) {
+                LoadingBox("در حال اسکن پوشه‌ها...")
+            } else if (matches.isNotEmpty()) {
                 val okCount = matches.count { it.folderName != null && it.pdfFiles.isNotEmpty() }
                 Text("مطابقت: " + okCount.toString() + " از " + matches.size.toString() + " دامنه")
-                LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 420.dpHeight())) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 430.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     items(matches) { m ->
                         MatchRow(m, checked = selected.contains(m.domain),
                             canCheck = m.pdfFiles.isNotEmpty() && m.hasEmail,
@@ -135,23 +143,22 @@ fun ReportsScreen(app: App, onBack: () -> Unit, onNext: () -> Unit) {
                 }
                 BigButton("ادامه ← تولید متن", enabled = selected.isNotEmpty()) { onNext() }
             }
+            OutlinedButton(onClick = { doScan() }) { Text("اسکن مجدد") }
         }
         TextButton(onClick = onBack) { Text("بازگشت") }
     }
 }
-
-private val Int.dpHeight get() = androidx.compose.ui.unit.Dp(this.toFloat())
 
 @Composable
 private fun MatchRow(m: DomainMatch, checked: Boolean, canCheck: Boolean, onToggle: (Boolean) -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surface) {
         Row(Modifier.fillMaxWidth().padding(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Checkbox(checked = checked, enabled = canCheck, onCheckedChange = onToggle)
-            Column(Modifier.fillMaxWidth()) {
+            Column {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(m.domain, fontSize = 15.sp)
-                    if (m.report?.score != null) Chip("امتیاز " + m.report.score.toString(), if ((m.report.score ?: 100) < 50) RedErr else OrangeWarn)
-                    if (m.report?.findings != null) Chip(m.report.findings.toString() + " یافته")
+                    m.report?.score?.let { Chip("امتیاز " + it.toString(), if (it < 50) RedErr else OrangeWarn) }
+                    m.report?.findings?.let { Chip(it.toString() + " یافته") }
                 }
                 if (m.folderName == null) SubTitle("پوشه‌ای پیدا نشد")
                 else if (m.pdfFiles.isEmpty()) SubTitle("PDF پیدا نشد")
