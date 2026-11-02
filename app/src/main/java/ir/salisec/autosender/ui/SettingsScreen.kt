@@ -3,14 +3,11 @@ package ir.salisec.autosender.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.dp
 import ir.salisec.autosender.App
-import ir.salisec.autosender.data.Settings
 
 @Composable
 fun SettingsScreen(app: App, onBack: () -> Unit) {
-    val context = LocalContext.current
     var s by remember { mutableStateOf(app.prefs.load()) }
     var saved by remember { mutableStateOf(false) }
 
