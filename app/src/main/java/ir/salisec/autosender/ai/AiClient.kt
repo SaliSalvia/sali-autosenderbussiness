@@ -60,7 +60,7 @@ class AiClient(private val client: OkHttpClient) {
             sb.append("این ایمیل دوم (پیگیری مؤدبانه) است. متن قبلی: ").append(previousBody?.take(300) ?: "").append('\n')
             sb.append("کوتاه (زیر ۸۰ کلمه): فرصت دیدن گزارش را داشتند؟ یک نکته ارزشمند اضافه کن و ارجاع بده به گزارش رایگان پیوست‌شده.")
         } else {
-            sb.append("زیر ۲۰۰ کلمه. شامل: عدد واقعی برای ریسک، یافته رایگان با مدرک، اشاره به اینکه بقیه یافته‌ها با راه‌حل در گزارش کامل است، " +
+            sb.append("زیر ۲۰۰ کلمه. شامل: عدد واقعی برای ریسک، یافته رایگان با مدرک، اشاره به اینکه بقیه یافته‌ها با راه‌حل در گزارش کامل است, " +
                 "و فراخوان: برای دریافت گزارش کامل به همین ایمیل پاسخ دهند و شناسه اسکن را اعلام کنند.")
         }
 
@@ -100,7 +100,7 @@ class AiClient(private val client: OkHttpClient) {
             val o = JSONObject(cleaned.substring(start, end + 1))
             AiResult(subject = o.getString("subject"), body = o.getString("body"))
         } catch (e: Exception) {
-            val subj = Regex("(موضوع|subject)[:：]\s*(.+)").find(content)?.groupValues?.get(2)?.trim()
+            val subj = Regex("(موضوع|subject)[:：]\\s*(.+)").find(content)?.groupValues?.get(2)?.trim()
                 ?: "گزارش امنیتی " + "سایت شما"
             AiResult(subject = subj.take(120), body = content.trim())
         }

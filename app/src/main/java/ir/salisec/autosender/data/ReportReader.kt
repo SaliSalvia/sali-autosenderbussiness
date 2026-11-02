@@ -67,9 +67,9 @@ object ReportReader {
                 if (ins == null) return null
                 PDDocument.load(ins).use { doc ->
                     val text = PDFTextStripper().getText(doc)
-                    val score = Regex("(\d{1,3})\s*/\s*100").find(text)?.groupValues?.get(1)?.toInt()
-                    val findings = Regex("در مجموع\s*(\d+)\s*یافته").find(text)?.groupValues?.get(1)?.toInt()
-                        ?: Regex("Total[^\n]*?(\d+)\s*findings?").find(text)?.groupValues?.get(1)?.toInt()
+                    val score = Regex("(\\d{1,3})\\s*/\\s*100").find(text)?.groupValues?.get(1)?.toInt()
+                    val findings = Regex("در مجموع\\s*(\\d+)\\s*یافته").find(text)?.groupValues?.get(1)?.toInt()
+                        ?: Regex("Total[^\\n]*?(\\d+)\\s*findings?").find(text)?.groupValues?.get(1)?.toInt()
                     val crit = countBy(text, "بحرانی", "Critical")
                     val high = countBy(text, "زیاد", "High")
                     val med = countBy(text, "متوسط", "Medium")
@@ -91,7 +91,7 @@ object ReportReader {
     }
 
     private fun countBy(text: String, fa: String, en: String): Int? {
-        val faM = Regex(fa + "\s*(\d+)").find(text) ?: Regex("(\d+)\s*" + en).find(text)
+        val faM = Regex(fa + "\\s*(\\d+)").find(text) ?: Regex("(\\d+)\\s*" + en).find(text)
         return faM?.groupValues?.get(1)?.toInt()
     }
 

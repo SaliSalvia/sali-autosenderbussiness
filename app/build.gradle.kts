@@ -63,11 +63,12 @@ dependencies {
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.documentfile:documentfile:1.0.1")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     implementation("com.sun.mail:android-mail:1.6.7")
-    implementation("com.sun.mail:android-activation:1.1.1")
+    implementation("com.sun.mail:android-activation:1.6.7")
 
     implementation("com.tom_roush:pdfbox-android:2.0.27.0")
 }

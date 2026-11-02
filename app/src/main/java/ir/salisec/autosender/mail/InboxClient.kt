@@ -46,7 +46,7 @@ class InboxClient {
                         from = (m.from?.firstOrNull()?.toString() ?: ""),
                         subject = m.subject ?: "",
                         date = m.sentDate?.time ?: 0L,
-                        preview = body.replace("\s+".toRegex(), " ").take(90)
+                        preview = body.replace("\\s+".toRegex(), " ").take(90)
                     ))
                 }
                 out
