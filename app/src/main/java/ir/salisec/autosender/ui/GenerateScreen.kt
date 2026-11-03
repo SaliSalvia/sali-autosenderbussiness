@@ -165,7 +165,7 @@ fun GenerateScreen(app: App, onBack: () -> Unit, onDone: () -> Unit) {
                     body = item.body,
                     pdfPaths = item.match.attachmentUris.joinToString("||"),
                     attachmentNames = item.match.attachmentNames.joinToString("||"),
-                    attachmentPages = item.match.trialAttachments
+                    attachmentPages = item.match.bundle.trialAttachments
                         .joinToString("||") { it.pages?.toString() ?: "" },
                     evidenceHash = item.match.bundle.fingerprint(),
                     qualityOk = true,
