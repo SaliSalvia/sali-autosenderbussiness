@@ -29,6 +29,15 @@
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
 
+# Tink (pulled in by androidx.security:security-crypto) references compile-time
+# only annotations that are not shipped in the APK. R8 full mode treats these as
+# missing-class errors; they are annotations, not runtime dependencies.
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn com.google.errorprone.**
+-dontwarn org.checkerframework.**
+-dontwarn javax.annotation.**
+-dontwarn com.google.crypto.tink.**
+
 # Kotlin / coroutines metadata used by the Compose compiler and serialization.
 -keepclassmembers class kotlin.Metadata { *; }
 -dontwarn kotlinx.coroutines.**
