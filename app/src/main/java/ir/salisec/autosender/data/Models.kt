@@ -35,7 +35,9 @@ data class CompanyContext(
 
 enum class PipelineState { SENT, REPLIED, NEGOTIATING, PAID, LOST }
 
-enum class MsgStatus { DRAFT, APPROVED, QUEUED, SENDING, SENT, FAILED, SKIPPED }
+/** UNCERTAIN = the provider may have accepted the message but the response was
+ *  lost (timeout / 5xx). It is NEVER auto-retried: a human must decide. */
+enum class MsgStatus { DRAFT, APPROVED, QUEUED, SENDING, SENT, FAILED, SKIPPED, UNCERTAIN }
 
 data class LogEntry(
     val ts: Long,
@@ -52,8 +54,15 @@ data class OutgoingMessage(
     val htmlBody: String,
     val textBody: String,
     val preheader: String = "",
-    val attachments: List<Pair<String, ByteArray>> = emptyList()
+    val attachments: List<Pair<String, ByteArray>> = emptyList(),
+    /** Stable UUID. Brevo keeps it for 30 minutes and rejects a duplicate
+     *  with `duplicate_parameter`; SMTP uses it as a deterministic Message-ID. */
+    val idempotencyKey: String = ""
 )
+
+/** Page counts recorded at approval time, re-checked before every send. */
+fun MessageEntity.pageCounts(): List<Int?> =
+    (attachmentPages ?: "").split("||").map { it.trim().toIntOrNull() }
 
 /** Match of a domain to its report folder.
  *  `bundle.pdfs` = every PDF (AI reads them all).

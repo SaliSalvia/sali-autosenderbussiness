@@ -1,9 +1,14 @@
 name: Build SaliBussiness APK
 
+# pull_request is REQUIRED: Dependabot PRs used to merge without any build at all,
+# which is how an AGP 9.5 / Gradle 8.9 mismatch reached main unnoticed.
 on:
   workflow_dispatch:
   push:
     branches: [ main, 'arena/**' ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
 
 permissions:
   contents: write
@@ -14,6 +19,7 @@ concurrency:
 
 jobs:
   build:
+    name: Test, lint and build APK / AAB
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,58 +31,95 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle 8.9
+      - name: Verify the pinned Gradle wrapper version
+        run: |
+          grep -q 'gradle-8.11.1-bin.zip' gradle/wrapper/gradle-wrapper.properties
+          echo "Pinned Gradle 8.11.1 (required by AGP 8.9.1 / compileSdk 36)."
+
+      - name: Install Android SDK platform 36 and build-tools 36
+        shell: bash
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SM" ]; then SM="$(find "$SDK" -name sdkmanager -type f | head -1)"; fi
+          echo "Using sdkmanager: $SM"
+          yes | "$SM" --licenses > /dev/null 2>&1 || true
+          "$SM" "platforms;android-36" "build-tools;36.0.0" > /dev/null
+          "$SM" --list_installed | grep -E 'platforms;android-36|build-tools;36' || true
+
+      - name: Set up Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.11.1'
 
-      - name: Generate Gradle wrapper (no binary jar committed)
-        run: gradle wrapper --gradle-version 8.9
+      # The wrapper JAR is a binary and is intentionally not committed. It is
+      # regenerated from the pinned distributionUrl reviewed above.
+      - name: Generate Gradle wrapper (pinned version)
+        run: gradle wrapper --gradle-version 8.11.1 --distribution-type bin
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Unit tests and Android lint
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon clean test lintDebug --stacktrace 2>&1 | tee checks.log
+
       - name: Build debug APK (installable, no secrets required)
         run: |
           set -o pipefail
-          ./gradlew assembleDebug --stacktrace 2>&1 | tee build.log
+          ./gradlew --no-daemon assembleDebug --stacktrace 2>&1 | tee build.log
 
-      - name: Build signed release APK (only when signing secrets exist)
+      - name: Build release APK and AAB (R8 on; signed only when secrets exist)
         env:
           SALI_KEYSTORE_BASE64: ${{ secrets.SALI_KEYSTORE_BASE64 }}
           SALI_KEYSTORE_PASSWORD: ${{ secrets.SALI_KEYSTORE_PASSWORD }}
           SALI_KEY_ALIAS: ${{ secrets.SALI_KEY_ALIAS }}
           SALI_KEY_PASSWORD: ${{ secrets.SALI_KEY_PASSWORD }}
+        shell: bash
         run: |
-          if [ -n "$SALI_KEYSTORE_BASE64" ]; then
-            echo "$SALI_KEYSTORE_BASE64" | base64 -d > sali.keystore
-            set -o pipefail
-            ./gradlew assembleRelease --stacktrace \
+          set -euo pipefail
+          if [[ -n "$SALI_KEYSTORE_BASE64" ]]; then
+            printf '%s' "$SALI_KEYSTORE_BASE64" | base64 --decode > sali.keystore
+            ./gradlew --no-daemon assembleRelease bundleRelease --stacktrace \
               -Pandroid.injected.signing.storeFile="$PWD/sali.keystore" \
               -Pandroid.injected.signing.storePassword="$SALI_KEYSTORE_PASSWORD" \
               -Pandroid.injected.signing.keyAlias="$SALI_KEY_ALIAS" \
               -Pandroid.injected.signing.keyPassword="$SALI_KEY_PASSWORD" 2>&1 | tee release.log
-            cp app/build/outputs/apk/release/app-release.apk SaliBussiness.apk
           else
-            echo "No signing secrets configured - the debug APK below is installable as-is."
+            echo "No signing secrets configured: building UNSIGNED release + AAB to validate R8."
+            ./gradlew --no-daemon assembleRelease bundleRelease --stacktrace 2>&1 | tee release.log
           fi
 
       - name: Collect installable artifacts
+        shell: bash
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk SaliBussiness-debug.apk
-          if [ ! -f SaliBussiness.apk ]; then
-            cp SaliBussiness-debug.apk SaliBussiness.apk
+          set -euo pipefail
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/SaliBussiness-debug.apk
+          if [[ -n "${{ secrets.SALI_KEYSTORE_BASE64 }}" ]]; then
+            cp app/build/outputs/apk/release/app-release.apk dist/SaliBussiness.apk
+          else
+            # Honest fallback: no secrets => the installable APK is the debug-signed
+            # build. It is NEVER advertised as a production-signed release.
+            cp dist/SaliBussiness-debug.apk dist/SaliBussiness.apk
           fi
-          ls -lh *.apk
+          if compgen -G "app/build/outputs/bundle/release/*.aab" > /dev/null; then
+            cp app/build/outputs/bundle/release/*.aab dist/SaliBussiness.aab
+          fi
+          (cd dist && sha256sum SaliBussiness*.apk SaliBussiness*.aab 2>/dev/null > SHA256SUMS.txt || true)
+          ls -lh dist/
 
-      - name: Upload compiler log on failure
+      - name: Upload compiler / test diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: build-logs
           path: |
+            checks.log
             build.log
             release.log
+            app/build/reports/
           if-no-files-found: ignore
           retention-days: 14
 
@@ -84,9 +127,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: SaliBussiness-APK
-          path: |
-            SaliBussiness.apk
-            SaliBussiness-debug.apk
+          path: dist/*
           if-no-files-found: error
           retention-days: 60
 
@@ -97,10 +138,28 @@ jobs:
           tag_name: latest
           name: SaliBussiness (latest build)
           body: |
-            Automatic build. `SaliBussiness.apk` is installable (signed release when signing
-            secrets are configured, otherwise the debug build). Only the two 2-page trial PDFs
-            are ever attached to an email; every PDF in a domain folder is read by the AI.
+            Automatic build with unit tests + lint + R8 release + AAB.
+            `SaliBussiness.apk` is the signed release ONLY when the four
+            `SALI_KEYSTORE_*` secrets are configured; otherwise it is an identical
+            copy of `SaliBussiness-debug.apk` and is NOT production-signed.
+            Only the two 2-page trial PDFs are ever attached to an email; every PDF
+            in a domain folder is read by the AI. Sending requires explicit human
+            approval, is idempotent, and re-checks opt-out before every request.
           files: |
-            SaliBussiness.apk
-            SaliBussiness-debug.apk
+            dist/SaliBussiness.apk
+            dist/SaliBussiness-debug.apk
+            dist/SaliBussiness.aab
+            dist/SHA256SUMS.txt
           make_latest: true
+
+      - name: Create versioned release on v* tags
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          name: SaliBussiness ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/SaliBussiness.apk
+            dist/SaliBussiness-debug.apk
+            dist/SaliBussiness.aab
+            dist/SHA256SUMS.txt

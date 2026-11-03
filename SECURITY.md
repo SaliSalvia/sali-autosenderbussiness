@@ -17,11 +17,13 @@
 | داده | محل | محافظت فعلی |
 |---|---|---|
 | کلیدهای hcnsec / You.com / Brevo / IMAP | `EncryptedSharedPreferences` (AES، Keystore دستگاه) | رمزنگاری at rest؛ هرگز در لاگ/artifact/Release چاپ نمیشود |
-| لیست مخاطبان (دامنه، ایمیل، نام)، موضوع و متن ایمیلها، لاگها | Room `sali.db` روی دستگاه | فقط محلی؛ بدون آپلود به سرور ما (هیچ بکندی وجود ندارد) |
+| لیست مخاطبان (دامنه، ایمیل، نام)، موضوع و متن ایمیلها، لاگها | Room `sali.db` روی دستگاه | فقط محلی؛ بدون آپلود به سرور ما (هیچ بکندی وجود ندارد). آدرسها در لاگها و خروجی لاگ **ماسک** میشوند (`PrivacyRedactor`) |
 | متن گزارشهای PDF | حافظه موقتی حین تولید متن | فقط به hcnsec بهعنوان زمینه نگارش ارسال میشود |
 | زمینه عمومی شرکت | You.com Search API | فقط اطلاعات سطح شرکت؛ snippetها از ایمیل/تلفن پاکسازی میشوند |
 
-> ⚠️ **شکاف شناختهشده:** تا پیش از فاز ۳ نقشه راه، `android:allowBackup` تنظیم نشده و دیتابیس ممکن است وارد پشتیبان دستگاه شود؛ `network_security_config` و migration رمزنگاریشده DB نیز هنوز اضافه نشدهاند. جزئیات و برنامه رفع: [`docs/WORLD_CLASS_ROADMAP.md`](docs/WORLD_CLASS_ROADMAP.md) فاز ۳ و [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
+✅ **رفعشده در 2.1.0:** `android:allowBackup="false"`، `usesCleartextTraffic="false"`، `network_security_config` (فقط system Trust Anchors)، لاگها و خطاها بدون PII/کلید، Migration واقعی Room `2→3`، و idempotency UUID با حالت `UNCERTAIN` بهجای retry خودکار هنگام گمشدن پاسخ. سیاست کامل: [`PRIVACY.md`](PRIVACY.md).
+
+> ⚠️ **شکافهای باقیمانده (قبل از انتشار عمومی):** Golden Set واقعی، وبحوک bounce/complaint، رضایت مستند بهازای هر مخاطب، تأیید عملی SPF/DKIM/DMARC دامنه فرستنده، و Play App Signing / AAB امضاشده. «پاکسازی کامل دادهها» داخل اپ و `dataExtractionRules` اضافه شدند. جزئیات: [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
 
 ## Non-negotiable rules for contributors
 - هیچ کلید، توکن، رمز یا نمونهای از PII واقعی را در کد، لاگ، اسکرینشات، تست یا توضیح PR قرار ندهید.
@@ -31,12 +33,13 @@
 - درخواست حذف (opt-out) باید فوراً و بهصورت دائمی اعمال شود.
 
 ## Dependency & build security
-- وابستگیها از `google()` / `mavenCentral()` و پینشدهاند؛ `Dependabot` بهصورت هفتگی PR میسازد.
-- سیکرتهای امضا فقط بهصورت GitHub Actions Secrets وارد CI میشوند؛ `*.keystore` در `.gitignore` است.
-- بیلدها روی `main` و شاخههای `arena/**` اجرا و لاگ کامپایلر بهعنوان artifact نگهداری میشود.
+- وابستگیها از `google()` / `mavenCentral()` و **پینشده**اند؛ `Dependabot` هفتگی PR میسازد ولی major ابزار ساخت (AGP/Kotlin) بهصورت هماهنگ و دستی مهاجرت داده میشود.
+- **همه PRها به `main`** اکنون `clean test lintDebug assembleDebug assembleRelease bundleRelease` را در CI اجرا میکنند؛ دیگر نمیتوان PR بدون بیلد ادغام کرد.
+- سیکرتهای امضا فقط بهصورت GitHub Actions Secrets وارد CI میشوند؛ `*.keystore` در `.gitignore` است. بدون سیکرت، APK ریلیس امضاشده معرفی **نمیشود**.
+- لاگ کامپایلر/تست هنگام شکست بهعنوان artifact نگهداری میشود؛ `SHA256SUMS.txt` همراه APK/AAB منتشر میگردد.
 
 ## Supported versions
 | نسخه | وضعیت |
 |---|---|
-| `2.0.0` (فعلی) | پشتیبانی و رفع اشکال امنیتی |
+| `2.0.0` / versionCode 3 (فعلی) | پشتیبانی و رفع اشکال امنیتی |
 | `< 2.0.0` | بدون پشتیبانی (هرگز منتشر نشد) |

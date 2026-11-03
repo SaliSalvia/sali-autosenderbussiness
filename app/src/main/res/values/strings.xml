@@ -1,4 +1,73 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SaliBussiness</string>
+
+    <!-- Home / dashboard -->
+    <string name="home_title">SaliBussiness</string>
+    <string name="home_subtitle">فضای کاری امن برای ارتباط حرفهای با مخاطبان خودتان</string>
+    <string name="home_workspace">فضای کاری</string>
+    <string name="home_bulk">ارسال گروهی</string>
+    <string name="home_bulk_hint">ارسال فقط برای پیامهایی فعال میشود که جداگانه توسط شما تأیید شدهاند.</string>
+    <string name="home_send_all">ارسال همه پیامهای تأییدشده</string>
+    <string name="home_queue_empty">صف تأییدشده خالی است</string>
+    <string name="home_manage_queue">مدیریت صف و توقف ارسال</string>
+    <string name="home_pending_chip">پیام آماده</string>
+    <string name="home_sending">ارسال در جریان</string>
+    <string name="home_paused">صف موقتاً متوقف است</string>
+    <string name="home_processing">در حال پردازش صف تأییدشده</string>
+    <string name="home_current">مخاطب فعلی</string>
+    <string name="home_domains">دامنه</string>
+    <string name="home_approved">تأییدشده</string>
+    <string name="home_queue">در صف</string>
+    <string name="home_confirm_title">تأیید ارسال گروهی</string>
+    <string name="home_confirm_body">ارسال بهصورت مرحلهای انجام میشود و ممکن است پس از رسیدن به سقف روزانه، ادامه صف به زمان دیگری موکول شود. هر پیام پیش از ارسال دوباره از نظر opt-out و پیوست بررسی میشود. شروع میکنید؟</string>
+    <string name="home_confirm_ok">شروع ارسال</string>
+    <string name="home_confirm_review">بازبینی صف</string>
+    <string name="home_card_campaign">کمپین جدید</string>
+    <string name="home_card_campaign_sub">دامنهها، مخاطبان، گزارشها و بازبینی پیامها</string>
+    <string name="home_card_inbox">صندوق ورودی</string>
+    <string name="home_card_inbox_sub">خواندن پاسخها و رسیدگی به درخواستهای حذف</string>
+    <string name="home_card_pipeline">خط لوله فروش</string>
+    <string name="home_card_pipeline_sub">پیگیری وضعیت سرنخها و پیامهای قبلی</string>
+    <string name="home_card_queue">صف و گزارش ارسال</string>
+    <string name="home_card_queue_sub">مشاهده وضعیت، توقف یا لغو پردازش</string>
+    <string name="home_card_settings">تنظیمات</string>
+    <string name="home_card_settings_sub">حساب ایمیل، اتصالها و سیاستهای ارسال</string>
+    <string name="cd_open">باز کردن</string>
+
+    <!-- Queue / send -->
+    <string name="send_title">صف ارسال</string>
+    <string name="send_subtitle">ارسال گروهی فقط پیامهای تأییدشده را پردازش میکند؛ هر پیام پیش از ارسال دوباره از نظر opt-out و پیوست بررسی میشود.</string>
+    <string name="send_status">وضعیت کمپین</string>
+    <string name="send_today">ارسال امروز</string>
+    <string name="send_paused">مکث شده</string>
+    <string name="send_sending">در حال ارسال</string>
+    <string name="send_resume">ادامه</string>
+    <string name="send_pause">مکث</string>
+    <string name="send_cancel">لغو صف</string>
+    <string name="send_bulk">ارسال گروهی همه پیامهای تأییدشده</string>
+    <string name="send_bulk_empty">پیام تأییدشدهای برای ارسال نیست</string>
+    <string name="send_waiting">ارسال بعدی حدود</string>
+    <string name="send_confirm_title">ارسال گروهی</string>
+    <string name="send_confirm_body">ارسال با فاصله تنظیمشده انجام میشود؛ سقف روزانه، opt-out و کنترل پیوستها رعایت خواهند شد. ادامه میدهید؟</string>
+    <string name="send_confirm_ok">تأیید و شروع</string>
+    <string name="send_confirm_cancel">انصراف</string>
+    <string name="send_messages">پیامها</string>
+    <string name="send_activity">فعالیت اخیر</string>
+    <string name="send_export">دریافت گزارش فعالیت (بدون ایمیل مخاطب)</string>
+    <string name="send_back">بازگشت</string>
+    <string name="send_no_subject">(بدون موضوع)</string>
+    <string name="status_approved">تأییدشده</string>
+    <string name="status_queued">در صف</string>
+    <string name="status_sending">در حال ارسال</string>
+    <string name="status_sent">ارسالشده</string>
+    <string name="status_failed">ناموفق</string>
+    <string name="status_skipped">ردشده</string>
+    <string name="status_uncertain">نیازمند بررسی</string>
+
+    <!-- Attachment policy (mandatory) -->
+    <string name="policy_title">سیاست پیوست (فقط نسخه trial دوصفحهای)</string>
+    <string name="policy_mandatory">اجبار ۲ پیوست trial — همیشه روشن و غیرقابل خاموش کردن</string>
+    <string name="policy_cap">سقف حجم هر پیوست (مگابایت)</string>
+    <string name="policy_note">Brevo حداکثر ۴ مگابایت برای هر پیوست و ۲۰ مگابایت برای کل ایمیل مجاز میداند. AI همه PDFهای پوشه را میخواند؛ ارسال فقط trial فارسی + trial انگلیسی ۲صفحهای است. سرویس ارسال پیش از هر network call دوباره نوع PDF، تعداد صفحات و حجم واقعی بایتها را بررسی میکند.</string>
 </resources>

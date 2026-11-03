@@ -1,14 +1,20 @@
 package ir.salisec.autosender.send
 
 import android.content.Context
+import android.net.Uri
 import ir.salisec.autosender.data.AppDatabase
+import ir.salisec.autosender.data.AttachmentGuard
 import ir.salisec.autosender.data.AttachmentPolicy
 import ir.salisec.autosender.data.LogEntity
 import ir.salisec.autosender.data.LogEntry
 import ir.salisec.autosender.data.MessageEntity
 import ir.salisec.autosender.data.OutgoingMessage
+import ir.salisec.autosender.data.PrivacyRedactor
 import ir.salisec.autosender.data.Prefs
+import ir.salisec.autosender.data.pageCounts
+import ir.salisec.autosender.mail.AmbiguousSendException
 import ir.salisec.autosender.mail.BrevoSender
+import ir.salisec.autosender.mail.DuplicateSendException
 import ir.salisec.autosender.mail.SmtpSender
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +26,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.util.UUID
 
 data class SendState(
     val running: Boolean = false,
@@ -34,19 +43,32 @@ data class SendState(
     val logs: List<LogEntry> = emptyList()
 )
 
-/** Queue processor. Sends ONLY human-approved emails, paced, with a final
- *  defence-in-depth check on the attachment policy and the grounding gate. */
+/**
+ * Queue processor. Sends ONLY human-approved emails, paced, with:
+ *  - an atomic claim/lease (a killed worker cannot re-send an in-flight item),
+ *  - one stable UUID per message (provider-side idempotency),
+ *  - UNCERTAIN instead of auto-retry when a response is lost,
+ *  - a final defence-in-depth check on opt-out, grounding and real PDF bytes,
+ *  - PII-free logs and errors.
+ */
 class SendEngine(
     private val appContext: Context,
     private val db: AppDatabase,
     private val prefs: Prefs,
     private val ok: OkHttpClient
 ) {
+    companion object {
+        const val LEASE_MS = 5L * 60L * 1000L
+        const val OWNER = "send-engine"
+    }
+
     private val _state = MutableStateFlow(SendState())
     val state: StateFlow<SendState> = _state
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
-    @Volatile private var cancelRequested = false
+
+    @Volatile
+    private var cancelRequested = false
 
     private val brevo = BrevoSender(ok)
     private val smtp = SmtpSender()
@@ -55,45 +77,60 @@ class SendEngine(
         if (job?.isActive == true) return
         cancelRequested = false
         job = scope.launch {
-            val s0 = prefs.load()
-            db.messageDao().requeueStuck()
+            val now0 = System.currentTimeMillis()
+            db.messageDao().requeueStuck(now0, "اجرای ناتمام قبلی؛ صف دوباره بررسی شد")
             var sentToday = db.messageDao().sentSince(startOfDay())
             var sent = 0
             var failed = 0
             var skipped = 0
-            val all = db.messageDao().all()
-            val pending = all.count { it.status in setOf("APPROVED", "QUEUED", "SENDING") }
+            val pending = db.messageDao().pendingCount()
             _state.value = _state.value.copy(
                 running = true, paused = false, total = pending,
                 sent = 0, failed = 0, skipped = 0, sentToday = sentToday
             )
 
             while (isActive && !cancelRequested) {
-                val msg = db.messageDao().nextQueued() ?: break
+                val now = System.currentTimeMillis()
+                // Also pick up leases that expired while this worker was waiting:
+                // a killed process must not leave a message stuck in SENDING.
+                db.messageDao().requeueStuck(now, "اجرای ناتمام؛ صف دوباره بررسی شد")
+                val candidate = db.messageDao().nextSendable(now) ?: break
                 if (_state.value.paused) {
                     waitWhilePaused()
                     if (cancelRequested) break
                 }
+                // Atomic claim: only one worker can own this message.
+                if (db.messageDao().claim(candidate.id, OWNER, now + LEASE_MS, now) == 0) continue
+                val msg = db.messageDao().byId(candidate.id) ?: continue
+                // Defence in depth: a claimed row must still be an approved,
+                // non-terminal message. Never send DRAFT / SENT / SKIPPED / UNCERTAIN.
+                if (!MessageState.isSendable(candidate.status) || msg.status != MessageState.SENDING) {
+                    settle(msg, MessageState.SKIPPED, "وضعیت پیام دیگر قابل ارسال نیست")
+                    skipped++
+                    _state.value = _state.value.copy(skipped = skipped)
+                    continue
+                }
 
                 val settings = prefs.load()
                 if (sentToday >= settings.dailyCap) {
-                    log(msg, false, "سقف روزانه رسیده است - فردا ادامه دهید")
+                    settle(msg, MessageState.QUEUED, "سقف روزانه رسیده است - فردا ادامه دهید")
+                    log(msg, false, "سقف روزانه رسیده است؛ صف متوقف شد")
                     break
                 }
 
-                // ---- compliance / policy guards (before any network call) ----
+                // ---- compliance / policy guards (before ANY network call) ----
                 if (prefs.isSuppressed(msg.email, msg.domain)) {
-                    db.messageDao().update(msg.copy(status = "SKIPPED", lastError = "در فهرست عدم ارسال (opt-out)"))
+                    settle(msg, MessageState.SKIPPED, "در فهرست عدم ارسال (opt-out)")
                     skipped++
                     _state.value = _state.value.copy(skipped = skipped)
                     log(msg, false, "رد شد: مخاطب درخواست حذف داده است")
                     continue
                 }
-                if (msg.evidenceHash.isNotBlank() && !msg.qualityOk) {
-                    db.messageDao().update(msg.copy(status = "SKIPPED", lastError = "گیت صحت متن تأیید نشده است"))
+                if (!msg.qualityOk || msg.evidenceHash.isBlank()) {
+                    settle(msg, MessageState.SKIPPED, "گیت صحت / شواهد متن تأیید نشده است")
                     skipped++
                     _state.value = _state.value.copy(skipped = skipped)
-                    log(msg, false, "رد شد: متن از بازبینی صحت عبور نکرده، دوباره بساز")
+                    log(msg, false, "رد شد: متن تأییدنشده یا بدون شواهد")
                     continue
                 }
 
@@ -103,85 +140,98 @@ class SendEngine(
                 } else {
                     paths.map { AttachmentPolicy.displayName(it) }
                 }
-                val attachProblem = attachmentProblem(settings, paths, names)
-                if (attachProblem != null) {
-                    db.messageDao().update(msg.copy(status = "SKIPPED", lastError = attachProblem))
+                val nameProblem = AttachmentGuard.validateNames(names)
+                if (nameProblem != null) {
+                    settle(msg, MessageState.SKIPPED, nameProblem)
                     skipped++
                     _state.value = _state.value.copy(skipped = skipped)
-                    log(msg, false, "رد شد: $attachProblem")
+                    log(msg, false, "رد شد: $nameProblem")
                     continue
                 }
 
-                _state.value = _state.value.copy(currentDomain = msg.domain)
-                db.messageDao().update(msg.copy(status = "SENDING"))
-
+                // Bounded read: never let a huge file fill the heap. Brevo's
+                // conservative per-attachment ceiling is 4 MB.
                 val attachments = mutableListOf<Pair<String, ByteArray>>()
-                var sizeProblem: String? = null
-                var totalBytes = 0L
+                var readProblem: String? = null
+                val perFileCap = minOf(
+                    AttachmentGuard.MAX_PER_FILE_BYTES,
+                    settings.maxAttachmentMb.coerceIn(1, 4) * 1024L * 1024L
+                )
                 for (i in paths.indices) {
                     try {
-                        val bytes = readBytes(appContext, paths[i])
-                        totalBytes += bytes.size
-                        if (totalBytes > settings.maxAttachmentMb.coerceAtLeast(1) * 1024L * 1024L) {
-                            sizeProblem = "حجم پیوست‌ها بیش از ${settings.maxAttachmentMb} مگابایت است"
-                            break
-                        }
+                        val bytes = readBounded(appContext, paths[i], perFileCap)
                         attachments.add((names.getOrNull(i) ?: AttachmentPolicy.displayName(paths[i])) to bytes)
                     } catch (e: Exception) {
-                        sizeProblem = "خواندن پیوست ناموفق: " + (e.message?.take(100) ?: "")
+                        readProblem = "خواندن پیوست ناموفق: " + PrivacyRedactor.redact(e.message).take(100)
                         break
                     }
                 }
-                if (sizeProblem != null || attachments.size != 2) {
-                    val why = sizeProblem ?: "پیوست‌ها کامل خوانده نشدند"
-                    db.messageDao().update(msg.copy(status = "QUEUED", lastError = why))
+                val fileProblem = readProblem ?: AttachmentGuard.validateFiles(
+                    names = names,
+                    pages = msg.pageCounts(),
+                    payloads = attachments.map { it.second },
+                    perFileCapMb = settings.maxAttachmentMb
+                )
+                if (fileProblem != null) {
+                    // Attachment problems are deterministic: do not retry, but do
+                    // not burn the message either - keep it for human repair.
+                    settle(msg, MessageState.FAILED, fileProblem)
                     failed++
                     _state.value = _state.value.copy(failed = failed)
-                    log(msg, false, why)
+                    log(msg, false, "رد شد: $fileProblem")
                     continue
                 }
 
+                // Stable idempotency key, persisted BEFORE the first request.
+                val uuid = msg.messageUuid?.takeIf { it.isNotBlank() }
+                    ?: UUID.randomUUID().toString()
+                if (msg.messageUuid.isNullOrBlank()) {
+                    db.messageDao().update(msg.copy(messageUuid = uuid))
+                }
+
+                _state.value = _state.value.copy(currentDomain = msg.domain)
                 val out = OutgoingMessage(
                     to = msg.email,
                     subject = msg.subject,
                     htmlBody = msg.body,
                     textBody = msg.body,
                     preheader = msg.preheader,
-                    attachments = attachments
+                    attachments = attachments,
+                    idempotencyKey = uuid
                 )
+
+                val attempts = msg.attempts + 1
                 try {
                     val sender = if (settings.sendMode == "BREVO_API") brevo else smtp
                     sender.send(settings, out)
-                    db.messageDao().update(
-                        msg.copy(
-                            status = "SENT",
-                            sentAt = System.currentTimeMillis(),
-                            attempts = msg.attempts + 1,
-                            lastError = null
-                        )
-                    )
+                    settle(msg, MessageState.SENT, null, sent = true, attempts = attempts)
                     sent++
                     sentToday++
                     _state.value = _state.value.copy(sent = sent, sentToday = sentToday)
                     log(msg, true, "ارسال شد | پیوست: " + names.joinToString(" + "))
+                } catch (e: DuplicateSendException) {
+                    // Brevo recognised the UUID: the first attempt DID go out.
+                    settle(msg, MessageState.SENT, null, sent = true, attempts = attempts)
+                    sent++
+                    sentToday++
+                    _state.value = _state.value.copy(sent = sent, sentToday = sentToday)
+                    log(msg, true, "ارسال تکراری مهار شد (idempotency)")
+                } catch (e: AmbiguousSendException) {
+                    settle(msg, MessageState.UNCERTAIN, "نتیجه نامشخص؛ بدون تلاش مجدد، بررسی دستی لازم است")
+                    failed++
+                    _state.value = _state.value.copy(failed = failed)
+                    log(msg, false, "نتیجه نامشخص (timeout/5xx): ارسال خودکار متوقف شد؛ وضعیت نیازمند بررسی انسان است")
                 } catch (e: Exception) {
-                    val attempts = msg.attempts + 1
-                    if (attempts >= 3) {
-                        db.messageDao().update(
-                            msg.copy(status = "FAILED", attempts = attempts, lastError = e.message?.take(200))
-                        )
+                    val next = MessageState.outcomeAfterFailure(attempts, ambiguous = false)
+                    settle(msg, next, PrivacyRedactor.safeError(e), attempts = attempts)
+                    if (next == MessageState.FAILED) {
                         failed++
                         _state.value = _state.value.copy(failed = failed)
-                        log(msg, false, "ناموفق: " + (e.message?.take(120) ?: ""))
-                    } else {
-                        db.messageDao().update(
-                            msg.copy(status = "QUEUED", attempts = attempts, lastError = e.message?.take(200))
-                        )
-                        log(msg, false, "تلاش $attempts ناموفق، دوباره تلاش می‌شود")
                     }
+                    log(msg, false, if (next == MessageState.QUEUED) "تلاش $attempts ناموفق، دوباره تلاش میشود" else "ناموفق پس از $attempts تلاش")
                 }
 
-                val next = db.messageDao().nextQueued()
+                val next = db.messageDao().nextSendable(System.currentTimeMillis())
                 if (next != null && !cancelRequested) {
                     val delayMs = (settings.delaySeconds + (0..maxOf(0, settings.jitterSeconds)).random()) * 1000L
                     _state.value = _state.value.copy(waitingUntil = System.currentTimeMillis() + delayMs)
@@ -202,20 +252,24 @@ class SendEngine(
         }
     }
 
-    private fun attachmentProblem(
-        s: ir.salisec.autosender.data.Settings,
-        paths: List<String>,
-        names: List<String>
-    ): String? {
-        if (!s.enforceTrialAttachments) return null
-        if (paths.size != 2) return "تعداد پیوست ${paths.size} است؛ فقط همان ۲ نسخه trial مجاز است"
-        if (names.size < 2 || names.take(2).any {
-                !AttachmentPolicy.isTrialName(it) || AttachmentPolicy.isFullName(it)
-            }
-        ) return "پیوست‌ها باید دقیقا نسخه trial فارسی و trial انگلیسی باشند"
-        val fa = names.take(2).count { AttachmentPolicy.isPersianName(it) }
-        if (fa != 1) return "یک trial فارسی و یک trial انگلیسی لازم است (تشخیص: $fa فارسی)"
-        return null
+    private suspend fun settle(
+        m: MessageEntity,
+        status: String,
+        error: String? = null,
+        sent: Boolean = false,
+        attempts: Int = m.attempts
+    ) {
+        db.messageDao().update(
+            m.copy(
+                status = status,
+                lastError = error?.let { PrivacyRedactor.redact(it).take(200) },
+                sentAt = if (sent) System.currentTimeMillis() else m.sentAt,
+                attempts = attempts,
+                leaseOwner = null,
+                leaseUntil = null,
+                updatedAt = System.currentTimeMillis()
+            )
+        )
     }
 
     private suspend fun waitWhilePaused() {
@@ -229,8 +283,16 @@ class SendEngine(
         _state.value = _state.value.copy(paused = false)
     }
 
+    /** Logs contain a public domain and a MASKED address - never raw PII. */
     private suspend fun log(msg: MessageEntity, ok: Boolean, text: String) {
-        val entry = LogEntry(System.currentTimeMillis(), msg.domain, msg.email, ok, text)
+        val clean = PrivacyRedactor.redact(text).take(300)
+        val entry = LogEntry(
+            System.currentTimeMillis(),
+            msg.domain,
+            PrivacyRedactor.maskEmail(msg.email),
+            ok,
+            clean
+        )
         db.logDao().insert(LogEntity(0, entry.ts, entry.domain, entry.email, entry.ok, entry.message))
         _state.value = _state.value.copy(logs = (listOf(entry) + _state.value.logs).take(300))
     }
@@ -242,6 +304,22 @@ class SendEngine(
         set(java.util.Calendar.MILLISECOND, 0)
     }.timeInMillis
 
-    private fun readBytes(context: Context, uriString: String): ByteArray =
-        context.contentResolver.openInputStream(android.net.Uri.parse(uriString))!!.use { it.readBytes() }
+    /** Streaming read with a hard ceiling: no unconditional readBytes() into heap. */
+    private fun readBounded(context: Context, uriString: String, maxBytes: Long): ByteArray {
+        val stream = context.contentResolver.openInputStream(Uri.parse(uriString))
+            ?: throw IOException("باز کردن پیوست ناموفق بود")
+        val out = ByteArrayOutputStream()
+        stream.use { ins ->
+            val buf = ByteArray(16 * 1024)
+            var total = 0L
+            while (true) {
+                val n = ins.read(buf)
+                if (n < 0) break
+                total += n
+                if (total > maxBytes) throw IOException("حجم پیوست از سقف ${maxBytes / 1024 / 1024} مگابایت بیشتر است")
+                out.write(buf, 0, n)
+            }
+        }
+        return out.toByteArray()
+    }
 }

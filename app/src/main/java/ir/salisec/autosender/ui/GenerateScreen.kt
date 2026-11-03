@@ -12,9 +12,11 @@ import ir.salisec.autosender.App
 import ir.salisec.autosender.ai.AiResult
 import ir.salisec.autosender.ai.QualityReport
 import ir.salisec.autosender.data.AggregateStats
+import ir.salisec.autosender.data.AttachmentGuard
 import ir.salisec.autosender.data.DomainMatch
 import ir.salisec.autosender.data.MessageEntity
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 /** Immutable per-domain item: every edit replaces the instance so Compose recomposes. */
 data class GenItem(
@@ -29,7 +31,9 @@ data class GenItem(
     val subjectAlternatives: List<String> = emptyList(),
     val quality: QualityReport = QualityReport(),
     val generated: Boolean = false,
-    val approved: Boolean = false
+    val approved: Boolean = false,
+    /** Stable idempotency key of the Room row created by approval. */
+    val messageUuid: String? = null
 ) {
     fun toResult(): AiResult = AiResult(
         subject = subject, preheader = preheader, body = body,
@@ -70,8 +74,23 @@ fun GenerateScreen(app: App, onBack: () -> Unit, onDone: () -> Unit) {
     )
 
     fun upd(idx: Int, f: (GenItem) -> GenItem) {
-        val next = f(items[idx])
-        items[idx] = if (next.generated) next.copy(quality = qualityFor(next)) else next
+        val current = items[idx]
+        val next = f(current)
+        val reviewed = if (next.generated) next.copy(quality = qualityFor(next)) else next
+        // RED LINE: editing an approved email invalidates its approval. The
+        // queued row is demoted to DRAFT immediately so the worker can never
+        // send a version the human has not approved.
+        if (current.approved && !current.messageUuid.isNullOrBlank()) {
+            val uuid = current.messageUuid!!
+            scope.launch {
+                app.db.messageDao().demote(uuid, "متن پس از تأیید ویرایش شد؛ نیاز به تأیید دوباره")
+            }
+        }
+        items[idx] = if (current.approved) {
+            reviewed.copy(approved = false, messageUuid = null)
+        } else {
+            reviewed
+        }
     }
 
     fun generateOne(idx: Int, onDoneGen: (Boolean) -> Unit) {
@@ -124,12 +143,18 @@ fun GenerateScreen(app: App, onBack: () -> Unit, onDone: () -> Unit) {
                 error = "فقط دو نسخه trial دوصفحه‌ای باید پیوست شود؛ ${item.domain} ناقص است"
                 return@launch
             }
+            val nameProblem = AttachmentGuard.validateNames(item.match.attachmentNames)
+            if (nameProblem != null) {
+                error = "پیوست ${item.domain} رد شد: $nameProblem"
+                return@launch
+            }
             val q = qualityFor(item)
             if (!q.passed) {
                 error = "متن ${item.domain} از گیت صحت عبور نکرد: " + q.blockers.joinToString(" | ")
                 upd(idx) { it.copy(quality = q) }
                 return@launch
             }
+            val uuid = item.messageUuid ?: UUID.randomUUID().toString()
             app.db.messageDao().insert(
                 MessageEntity(
                     domain = item.domain,
@@ -140,12 +165,16 @@ fun GenerateScreen(app: App, onBack: () -> Unit, onDone: () -> Unit) {
                     body = item.body,
                     pdfPaths = item.match.attachmentUris.joinToString("||"),
                     attachmentNames = item.match.attachmentNames.joinToString("||"),
+                    attachmentPages = item.match.bundle.trialAttachments
+                        .joinToString("||") { it.pages?.toString() ?: "" },
                     evidenceHash = item.match.bundle.fingerprint(),
                     qualityOk = true,
+                    messageUuid = uuid,
+                    campaignId = "active",
                     status = "APPROVED"
                 )
             )
-            upd(idx) { it.copy(approved = true, quality = q) }
+            items[idx] = item.copy(approved = true, quality = q, messageUuid = uuid)
             approvedCount++
         }
     }
