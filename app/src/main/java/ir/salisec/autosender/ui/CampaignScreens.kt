@@ -17,6 +17,7 @@ import ir.salisec.autosender.App
 import ir.salisec.autosender.data.ContactsParser
 import ir.salisec.autosender.data.DomainMatch
 import ir.salisec.autosender.data.DomainValidator
+import ir.salisec.autosender.data.ReportBundle
 import ir.salisec.autosender.data.ReportReader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -31,7 +32,7 @@ fun DomainsScreen(app: App, onBack: () -> Unit, onNext: () -> Unit) {
 
     ScreenScaffold {
         Title("۱. ورود دامنه‌ها")
-        SubTitle("دامنه‌ها را با فاصله یا خط جدید وارد کنید (۲ تا ۲۰۰ دامنه)")
+        SubTitle("دامنه‌ها را با فاصله یا خط جدید وارد کنید (۲ تا ۲۰۰ دامنه). فقط دامنه‌هایی که خودتان اسکن کرده اید.")
         LabeledField("دامنه‌ها", raw, multiline = true) { raw = it }
         Text(if (valid.isEmpty()) "۰ دامنه معتبر"
         else valid.size.toString() + " دامنه معتبر" + (if (invalid.isEmpty()) "" else " | " + invalid.size.toString() + " نامعتبر/تکراری"))
@@ -48,24 +49,34 @@ fun DomainsScreen(app: App, onBack: () -> Unit, onNext: () -> Unit) {
 fun ContactsScreen(app: App, onBack: () -> Unit, onNext: () -> Unit) {
     val context = LocalContext.current
     var raw by remember { mutableStateOf("") }
-    val contacts = remember(raw) { ContactsParser.parse(raw) }
+    val suppressed = remember { app.prefs.suppressedSet() }
+    val all = remember(raw) { ContactsParser.parse(raw) }
+    val contacts = all.filter {
+        !suppressed.contains(it.email.lowercase()) && !suppressed.contains(it.domain.lowercase())
+    }
+    val blocked = all.size - contacts.size
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             raw = try {
-                context.contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() }
-            } catch (e: Exception) { "" }
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
+            } catch (e: Exception) {
+                ""
+            }
         }
     }
 
     ScreenScaffold {
         Title("۲. مخاطبان")
-        SubTitle("هر خط: دامنه،ایمیل،نام (نام اختیاری) — فقط سرنخ‌های خودت")
+        SubTitle("هر خط: دامنه،ایمیل،نام (نام اختیاری) — فقط لیست سرنخ‌های خودت؛ هیچ جمع آوری خودکاری انجام نمی‌شود.")
         LabeledField("لیست مخاطبان", raw, multiline = true) { raw = it }
-        OutlinedButton(onClick = { filePicker.launch(arrayOf("text/*")) }) { Text("وارد کردن فایل CSV") }
+        OutlinedButton(onClick = { filePicker.launch(arrayOf("text/*", "text/csv")) }) { Text("وارد کردن فایل CSV") }
         Text(if (contacts.isEmpty()) "۰ مخاطب معتبر" else contacts.size.toString() + " مخاطب معتبر")
         val withDomain = contacts.count { c -> app.session.domains.value.contains(c.domain) }
         SubTitle(withDomain.toString() + " مخاطب با دامنه‌های این کمپین مطابقت دارد")
+        val roles = contacts.count { it.isRole }
+        if (roles > 0) SubTitle("$roles ایمیل عمومی (info@/sales@/...) است؛ برای نرخ پاسخ بالاتر، ایمیل فرد تصمیم گیرنده را ترجیح بده.")
+        if (blocked > 0) Chip("$blocked مخاطب به دلیل درخواست حذف (opt-out) کنار گذاشته شد", OrangeWarn)
         BigButton("ادامه ← گزارش‌ها", enabled = contacts.isNotEmpty()) {
             app.session.contacts.value = contacts.associateBy { it.domain }
             onNext()
@@ -100,16 +111,22 @@ fun ReportsScreen(app: App, onBack: () -> Unit, onNext: () -> Unit) {
             val result = withContext(Dispatchers.IO) {
                 app.session.domains.value.map { d ->
                     val folder = if (root != null) ReportReader.findFolder(root, d) else null
-                    val pdfs = if (folder != null) ReportReader.pdfsIn(folder).map { it.uri.toString() } else emptyList()
-                    val report = if (folder != null) ReportReader.readReport(context, d, folder) else null
-                    DomainMatch(domain = d, folderName = folder?.name, pdfFiles = pdfs, report = report,
-                        hasEmail = app.session.contacts.value.containsKey(d))
+                    val bundle: ReportBundle = if (folder != null) {
+                        ReportReader.readBundle(context, d, folder)
+                    } else {
+                        ReportBundle(domain = d, warnings = listOf("پوشه‌ای برای این دامنه پیدا نشد"))
+                    }
+                    DomainMatch(
+                        domain = d,
+                        folderName = folder?.name,
+                        bundle = bundle,
+                        report = bundle.data,
+                        hasEmail = app.session.contacts.value.containsKey(d)
+                    )
                 }
             }
             app.session.matches.value = result
-            app.session.selected.value = result
-                .filter { it.folderName != null && it.pdfFiles.isNotEmpty() && it.hasEmail }
-                .map { it.domain }.toSet()
+            app.session.selected.value = result.filter { it.readyForApproval }.map { it.domain }.toSet()
             scanning = false
         }
     }
@@ -118,27 +135,34 @@ fun ReportsScreen(app: App, onBack: () -> Unit, onNext: () -> Unit) {
 
     ScreenScaffold {
         Title("۳. گزارش‌های امنیتی")
+        SubTitle("AI تمام PDFهای هر پوشه را میخواند؛ ولی فقط دو نسخه trial دوصفحه‌ای (فارسی + انگلیسی) پیوست و ارسال میشود.")
         if (!folderSet) {
-            SubTitle("پوشه‌ی sitest را انتخاب کن (جایی که پوشه‌ی هر دامنه و PDFهای آن است)")
+            SubTitle("پوشه sitest را انتخاب کن (جایی که پوشه هر دامنه و PDFهای آن است)")
             BigButton("انتخاب پوشه sitest") { treePicker.launch(null) }
         } else {
             if (scanning) {
-                LoadingBox("در حال اسکن پوشه‌ها...")
+                LoadingBox("در حال خواندن تمام PDFها و استخراج شواهد واقعی...")
             } else if (matches.isNotEmpty()) {
-                val okCount = matches.count { it.folderName != null && it.pdfFiles.isNotEmpty() }
-                Text("مطابقت: " + okCount.toString() + " از " + matches.size.toString() + " دامنه")
+                val okCount = matches.count { it.readyForApproval }
+                val totalPdfs = matches.sumOf { it.pdfCount }
+                val totalAttachments = matches.sumOf { it.attachmentUris.size }
+                Text("آماده: $okCount از ${matches.size} دامنه")
+                SubTitle("جمعا $totalPdfs فایل PDF خوانده شد برای تحلیل AI | $totalAttachments فایل trial مجاز به پیوست")
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().heightIn(max = 430.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(matches) { m ->
-                        MatchRow(m, checked = selected.contains(m.domain),
-                            canCheck = m.pdfFiles.isNotEmpty() && m.hasEmail,
+                        MatchRow(
+                            m,
+                            checked = selected.contains(m.domain),
+                            canCheck = m.readyForApproval,
                             onToggle = {
                                 val s = app.session.selected.value.toMutableSet()
                                 if (it) s.add(m.domain) else s.remove(m.domain)
                                 app.session.selected.value = s
-                            })
+                            }
+                        )
                     }
                 }
                 BigButton("ادامه ← تولید متن", enabled = selected.isNotEmpty()) { onNext() }
@@ -157,13 +181,16 @@ private fun MatchRow(m: DomainMatch, checked: Boolean, canCheck: Boolean, onTogg
             Column {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(m.domain, fontSize = 15.sp)
-                    m.report?.score?.let { Chip("امتیاز " + it.toString(), if (it < 50) RedErr else OrangeWarn) }
-                    m.report?.findings?.let { Chip(it.toString() + " یافته") }
+                    m.report?.score?.let { Chip("امتیاز $it", if (it < 50) RedErr else OrangeWarn) }
+                    m.report?.findings?.let { Chip("$it یافته") }
                 }
                 if (m.folderName == null) SubTitle("پوشه‌ای پیدا نشد")
-                else if (m.pdfFiles.isEmpty()) SubTitle("PDF پیدا نشد")
-                else SubTitle(m.pdfFiles.size.toString() + " فایل PDF")
+                else if (m.pdfCount == 0) SubTitle("PDF پیدا نشد")
+                else SubTitle("${m.pdfCount} فایل PDF خوانده شد توسط AI")
+                if (m.attachmentNames.isEmpty()) Chip("هیچ نسخه trial دوصفحه‌ای پیدا نشد", RedErr)
+                else SubTitle("پیوست مجاز (${m.attachmentNames.size}/۲): " + m.attachmentNames.joinToString(" + "))
                 if (!m.hasEmail) SubTitle("ایمیل مخاطب ندارد (در مرحله ۲ اضافه کن)")
+                m.warnings.take(3).forEach { w -> SubTitle("⚠ $w") }
             }
         }
     }

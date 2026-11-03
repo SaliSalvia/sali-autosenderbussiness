@@ -52,9 +52,10 @@ fun Section(header: String, content: @Composable ColumnScope.() -> Unit) {
 fun LabeledField(
     label: String,
     value: String,
-    onChange: (String) -> Unit,
     multiline: Boolean = false,
-    singleLine: Boolean = false
+    singleLine: Boolean = false,
+    // MUST be the last parameter: Kotlin binds a trailing lambda to the final parameter.
+    onChange: (String) -> Unit
 ) {
     Column(Modifier.fillMaxWidth()) {
         Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))

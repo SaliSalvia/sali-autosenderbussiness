@@ -50,7 +50,10 @@ fun SendScreen(app: App, onBack: () -> Unit) {
     ScreenScaffold {
         Title("۵. ارسال و پیشرفت")
         Section("وضعیت") {
-            Text("کل صف: " + state.total.toString() + " | ارسال‌شده: " + state.sent.toString() + " | ناموفق: " + state.failed.toString() + " | امروز: " + state.sentToday.toString())
+            Text("کل صف: " + state.total.toString() + " | ارسال‌شده: " + state.sent.toString() +
+                " | ناموفق: " + state.failed.toString() + " | رد شده: " + state.skipped.toString() +
+                " | امروز: " + state.sentToday.toString())
+            SubTitle("قبل از هر ارسال: درخواست حذف، گیت صحت متن، و دقیقا ۲ پیوست trial دوصفحه‌ای دوباره بررسی میشود.")
             if (state.running) {
                 Chip(if (state.paused) "متوقف موقت" else "در حال ارسال", if (state.paused) OrangeWarn else GreenOk)
                 state.currentDomain?.let { SubTitle("در حال ارسال: " + it) }

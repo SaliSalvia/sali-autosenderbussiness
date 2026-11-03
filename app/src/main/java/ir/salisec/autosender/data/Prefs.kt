@@ -5,19 +5,27 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
-/** All app settings + secrets, encrypted at rest. */
+const val YOU_SEARCH_ENDPOINT = "https://ydc-index.io/v1/search"
+const val HCNS_CHAT_ENDPOINT = "https://api.hcnsec.cn/v1/chat/completions"
+
+/** All app settings + secrets, encrypted at rest (AES, device-bound). */
 data class Settings(
     // identity
     val fromName: String = "SaliSecure Security Team",
     val fromEmail: String = "",
     val replyTo: String = "",
     val signature: String = "SaliSecure Security Research Team\nhttps://salisec.ir",
-    // keys
+    // hcnsec (OpenAI-compatible)
     val hcnsKey: String = "",
-    val hcnsEndpoint: String = "https://api.hcnsec.cn/v1/chat/completions",
+    val hcnsEndpoint: String = HCNS_CHAT_ENDPOINT,
     val hcnsModel: String = "gpt-4o-mini",
+    val hcnsReviewModel: String = "",
+    val enableCriticPass: Boolean = true,
+    val maxAiCallsPerEmail: Int = 3,
+    // You.com (public business context only)
     val youKey: String = "",
-    val youEndpoint: String = "https://api.youdotcom.ai/search",
+    val youEndpoint: String = YOU_SEARCH_ENDPOINT,
+    val youCount: Int = 5,
     // sending: BREVO_API or SMTP
     val sendMode: String = "BREVO_API",
     val brevoKey: String = "",
@@ -25,15 +33,21 @@ data class Settings(
     val smtpPort: Int = 587,
     val smtpUser: String = "",
     val smtpPass: String = "",
-    // inbound (IMAP)
+    // inbound IMAP
     val imapHost: String = "",
     val imapPort: Int = 993,
     val imapUser: String = "",
     val imapPass: String = "",
-    // pacing
+    // pacing / deliverability hygiene
     val delaySeconds: Int = 75,
     val jitterSeconds: Int = 25,
     val dailyCap: Int = 100,
+    // attachment policy
+    val enforceTrialAttachments: Boolean = true,
+    val maxAttachmentMb: Int = 8,
+    val unsubscribeFooter: String = "اگر تمایلی به دریافت این گزارش‌ها ندارید، کافی است با واژه «حذف» پاسخ دهید؛ بلافاصله از فهرست حذف می‌شوید.",
+    // suppression list (opt-out honouring), comma-separated emails and domains
+    val suppressed: String = "",
     // folders
     val sitestFolderUri: String = ""
 )
@@ -53,10 +67,14 @@ class Prefs(context: Context) {
         replyTo = sp.getString("replyTo", "")!!,
         signature = sp.getString("signature", "SaliSecure Security Research Team\nhttps://salisec.ir")!!,
         hcnsKey = sp.getString("hcnsKey", "")!!,
-        hcnsEndpoint = sp.getString("hcnsEndpoint", "https://api.hcnsec.cn/v1/chat/completions")!!,
-        hcnsModel = sp.getString("hcnsModel", "gpt-4o-mini")!!,
+        hcnsEndpoint = sp.getString("hcnsEndpoint", HCNS_CHAT_ENDPOINT)!!.ifBlank { HCNS_CHAT_ENDPOINT },
+        hcnsModel = sp.getString("hcnsModel", "gpt-4o-mini")!!.ifBlank { "gpt-4o-mini" },
+        hcnsReviewModel = sp.getString("hcnsReviewModel", "")!!,
+        enableCriticPass = sp.getBoolean("enableCriticPass", true),
+        maxAiCallsPerEmail = sp.getInt("maxAiCallsPerEmail", 3),
         youKey = sp.getString("youKey", "")!!,
-        youEndpoint = sp.getString("youEndpoint", "https://api.youdotcom.ai/search")!!,
+        youEndpoint = migrateYouEndpoint(sp.getString("youEndpoint", YOU_SEARCH_ENDPOINT)),
+        youCount = sp.getInt("youCount", 5),
         sendMode = sp.getString("sendMode", "BREVO_API")!!,
         brevoKey = sp.getString("brevoKey", "")!!,
         smtpHost = sp.getString("smtpHost", "")!!,
@@ -70,6 +88,10 @@ class Prefs(context: Context) {
         delaySeconds = sp.getInt("delaySeconds", 75),
         jitterSeconds = sp.getInt("jitterSeconds", 25),
         dailyCap = sp.getInt("dailyCap", 100),
+        enforceTrialAttachments = sp.getBoolean("enforceTrialAttachments", true),
+        maxAttachmentMb = sp.getInt("maxAttachmentMb", 8),
+        unsubscribeFooter = sp.getString("unsubscribeFooter", DEFAULT_FOOTER)!!.ifBlank { DEFAULT_FOOTER },
+        suppressed = sp.getString("suppressed", "")!!,
         sitestFolderUri = sp.getString("sitestFolderUri", "")!!
     )
 
@@ -82,8 +104,12 @@ class Prefs(context: Context) {
             .putString("hcnsKey", s.hcnsKey)
             .putString("hcnsEndpoint", s.hcnsEndpoint)
             .putString("hcnsModel", s.hcnsModel)
+            .putString("hcnsReviewModel", s.hcnsReviewModel)
+            .putBoolean("enableCriticPass", s.enableCriticPass)
+            .putInt("maxAiCallsPerEmail", s.maxAiCallsPerEmail)
             .putString("youKey", s.youKey)
-            .putString("youEndpoint", s.youEndpoint)
+            .putString("youEndpoint", migrateYouEndpoint(s.youEndpoint))
+            .putInt("youCount", s.youCount)
             .putString("sendMode", s.sendMode)
             .putString("brevoKey", s.brevoKey)
             .putString("smtpHost", s.smtpHost)
@@ -97,7 +123,47 @@ class Prefs(context: Context) {
             .putInt("delaySeconds", s.delaySeconds)
             .putInt("jitterSeconds", s.jitterSeconds)
             .putInt("dailyCap", s.dailyCap)
+            .putBoolean("enforceTrialAttachments", s.enforceTrialAttachments)
+            .putInt("maxAttachmentMb", s.maxAttachmentMb)
+            .putString("unsubscribeFooter", s.unsubscribeFooter)
+            .putString("suppressed", s.suppressed)
             .putString("sitestFolderUri", s.sitestFolderUri)
             .apply()
+    }
+
+    /** Legacy endpoint from older builds -> current documented You.com Search API. */
+    private fun migrateYouEndpoint(v: String?): String {
+        val value = v?.trim().orEmpty()
+        return when {
+            value.isBlank() -> YOU_SEARCH_ENDPOINT
+            value.contains("api.youdotcom.ai") -> YOU_SEARCH_ENDPOINT
+            value.contains("api.ydc-index.io") -> "https://ydc-index.io/v1/search"
+            else -> value
+        }
+    }
+
+    /** Opt-out list: never send to a suppressed email or domain. */
+    fun suppressedSet(): Set<String> = sp.getString("suppressed", "")!!
+        .split(',', '\n', ';')
+        .map { it.trim().lowercase() }
+        .filter { it.isNotEmpty() }
+        .toSet()
+
+    fun isSuppressed(email: String, domain: String = ""): Boolean {
+        val set = suppressedSet()
+        return set.contains(email.trim().lowercase()) ||
+            (domain.isNotBlank() && set.contains(domain.trim().lowercase()))
+    }
+
+    fun addSuppressed(entry: String) {
+        val e = entry.trim().lowercase()
+        if (e.isEmpty()) return
+        val next = (suppressedSet() + e).joinToString(",")
+        sp.edit().putString("suppressed", next).apply()
+    }
+
+    companion object {
+        const val DEFAULT_FOOTER =
+            "اگر تمایلی به دریافت این گزارش‌ها ندارید، کافی است با واژه «حذف» پاسخ دهید؛ بلافاصله از فهرست حذف می‌شوید."
     }
 }

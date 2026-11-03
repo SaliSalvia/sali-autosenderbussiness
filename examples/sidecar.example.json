@@ -1,0 +1,16 @@
+{
+  "domain": "esam.ir",
+  "scan_id": "SCAN-20261030-A1B2C3",
+  "score": 42,
+  "findings": 17,
+  "critical": 2,
+  "high": 5,
+  "medium": 7,
+  "low": 3,
+  "free_finding_title": "سیاست DMARC روی p=none تنظیم شده است",
+  "free_finding_cvss": "7.5",
+  "free_finding_impact": "امکان جعل ایمیل با استفاده از دامنه هدف",
+  "free_finding_solution": "پس از هم ترازی SPF و DKIM، سیاست DMARC را به p=reject تغییر دهید",
+  "subdomains": 12,
+  "_note": "این فایل کنار PDFها در پوشه دامنه قرار میگیرد. تمام اعداد متن ایمیل باید از همینجا یا متن واقعی PDFها باشند؛ AI حق ساخت عدد جدید ندارد. فقط نسخه های trial دوصفحه ای (فارسی + انگلیسی) پیوست میشوند."
+}
