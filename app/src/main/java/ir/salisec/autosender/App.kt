@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
 /** Campaign wizard state. Persisted (minus report text) so killing the app
@@ -84,6 +85,18 @@ class App : Application() {
         val saved = runBlocking(Dispatchers.IO) { db.campaignDao().active() }
         session.restore(CampaignSnapshot.decode(saved?.payload))
         persistCampaign()
+    }
+
+    /** In-app "delete all data" required by PRIVACY.md. Removes queued and
+     *  approved messages, masked logs, the persisted campaign draft and every
+     *  encrypted setting. Exported log files live in the user's own storage and
+     *  must be deleted by the user. */
+    suspend fun clearAllData() = withContext(Dispatchers.IO) {
+        db.messageDao().clearAll()
+        db.logDao().clearAll()
+        db.campaignDao().clearAll()
+        prefs.clear()
+        session.reset()
     }
 
     private fun persistCampaign() {

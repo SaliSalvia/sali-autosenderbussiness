@@ -135,6 +135,13 @@ class Prefs(context: Context) {
             .apply()
     }
 
+    /** PRIVACY.md "delete all data": wipes every encrypted setting (including
+     *  API keys, IMAP credentials and the suppression list). The master key
+     *  itself is removed by Android when the app data is cleared. */
+    fun clear() {
+        sp.edit().clear().commit()
+    }
+
     /** Legacy endpoint from older builds -> current documented You.com Search API. */
     private fun migrateYouEndpoint(v: String?): String {
         val value = v?.trim().orEmpty()

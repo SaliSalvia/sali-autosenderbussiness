@@ -9,7 +9,8 @@
 
 **وضعیت (versionName `2.0.0` / versionCode `3`):** نسخه قابلنصب و سختسازیشده. `compileSdk/targetSdk = 36`،
 بیلد CI شامل تست واحد + lint + R8 release + AAB، صف ارسال idempotent با قفل/lease، لاگ بدون PII،
-`allowBackup=false`، و داشبورد کاری با **یک دکمه ارسال گروهی** (فقط پیامهای تأییدشده).
+`allowBackup=false` + `dataExtractionRules`، «پاکسازی کامل دادهها» داخل تنظیمات، و داشبورد کاری با
+**یک دکمه ارسال گروهی** (فقط پیامهای تأییدشده).
 بیلد سبز لازم است، نه کافی؛ بندهای باقیمانده در [چکلیست انتشار](docs/RELEASE_CHECKLIST.md) مشخصاند.
 
 ## اصول غیرقابل تغییر

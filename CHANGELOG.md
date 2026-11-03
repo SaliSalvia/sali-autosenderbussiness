@@ -25,14 +25,15 @@
 - تم Material 3 روشن/تیره + RTL ثابت، رشتههای UI در `strings.xml`، `contentDescription` برای آیکونها، `ContextCompat.startForegroundService` (سازگار با minSdk 24).
 
 ### Changed — امنیت و انتشار
-- `allowBackup=false`، `usesCleartextTraffic=false`، `res/xml/network_security_config.xml`.
+- `allowBackup=false`، `usesCleartextTraffic=false`، `res/xml/network_security_config.xml` و `res/xml/data_extraction_rules.xml` (حذف cloud backup / device transfer در Android 12+).
+- «پاکسازی کامل دادههای اپ» در تنظیمات با دیالوگ تأیید: `App.clearAllData()` جداول `messages`/`logs`/`campaigns`، تنظیمات رمزنگاریشده و session را پاک میکند؛ `PRIVACY.md` FA/EN به همان نام دکمه بهروز شد.
 - `isMinifyEnabled=true` + `isShrinkResources=true` با قواعد R8 محافظهکارانه؛ `lint { abortOnError = false }` بهعنوان گزارش.
 - `versionCode = 3`, `versionName = "2.0.0"`, `targetSdk/compileSdk = 36` (الزام Play از ۲۰۲۶-۰۸-۳۱).
 - CI: `clean test lintDebug assembleDebug assembleRelease bundleRelease`، نصب صریح `platforms;android-36`، artifact `SaliBussiness-APK` شامل APK + AAB + `SHA256SUMS.txt`، Release `latest` فقط روی `main`، امضای ریلیس فقط با چهار سیکرت `SALI_KEYSTORE_*`.
 - `SECURITY.md` بهوضعیت جدید بهروز شد؛ [`PRIVACY.md`](PRIVACY.md) (FA/EN) و [`CONTRIBUTING.md`](CONTRIBUTING.md) اضافه شدند.
 
 ### Known limitations (باقیمانده)
-Golden Set فعلاً **مصنوعی** است (نمونه واقعی بینامشده در مخزن قرار نمیگیرد)؛ دکمه «حذف همه دادههای من» داخل اپ، وبحوک bounce/complaint، detekt/ktlint، KSP، AAB/Play App Signing امضاشده و تأیید عملی SPF/DKIM/DMARC هنوز انجام نشدهاند. فاز ۰ نقشه راه بهمعنای «آماده Play» نیست.
+Golden Set فعلاً **مصنوعی** است (نمونه واقعی بینامشده در مخزن قرار نمیگیرد)؛ وبحوک bounce/complaint، رضایت مستند بهازای هر مخاطب، detekt/ktlint، KSP، AAB/Play App Signing امضاشده و تأیید عملی SPF/DKIM/DMARC هنوز انجام نشدهاند. «پاکسازی کامل دادهها» داخل تنظیمات و `@xml/data_extraction_rules` پیادهسازی شدند. فاز ۰ نقشه راه بهمعنای «آماده Play» نیست.
 
 ## [Unreleased] — اسناد نقشه راه
 ### Added

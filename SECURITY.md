@@ -23,7 +23,7 @@
 
 ✅ **رفعشده در 2.1.0:** `android:allowBackup="false"`، `usesCleartextTraffic="false"`، `network_security_config` (فقط system Trust Anchors)، لاگها و خطاها بدون PII/کلید، Migration واقعی Room `2→3`، و idempotency UUID با حالت `UNCERTAIN` بهجای retry خودکار هنگام گمشدن پاسخ. سیاست کامل: [`PRIVACY.md`](PRIVACY.md).
 
-> ⚠️ **شکافهای باقیمانده (قبل از انتشار عمومی):** «حذف همه دادههای من» داخل اپ، وبحوک bounce/complaint، تأیید عملی SPF/DKIM/DMARC دامنه فرستنده، و Play App Signing / AAB امضاشده. جزئیات: [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
+> ⚠️ **شکافهای باقیمانده (قبل از انتشار عمومی):** Golden Set واقعی، وبحوک bounce/complaint، رضایت مستند بهازای هر مخاطب، تأیید عملی SPF/DKIM/DMARC دامنه فرستنده، و Play App Signing / AAB امضاشده. «پاکسازی کامل دادهها» داخل اپ و `dataExtractionRules` اضافه شدند. جزئیات: [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
 
 ## Non-negotiable rules for contributors
 - هیچ کلید، توکن، رمز یا نمونهای از PII واقعی را در کد، لاگ، اسکرینشات، تست یا توضیح PR قرار ندهید.

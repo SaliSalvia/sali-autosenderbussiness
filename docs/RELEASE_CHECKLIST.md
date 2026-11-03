@@ -6,8 +6,9 @@
 > ## 🔴 تصمیم فعلی: **No-Go برای انتشار عمومی / Play**
 > فاز ۰ و بخش بزرگی از فاز ۱–۴ اجرا شده (بیلد سبز، تست واحد، idempotency، lease، migration،
 > API 36، بکاپ/شبکه، R8، PRIVACY/SECURITY، AAB در CI)، ولی بندهای P0 زیر همچنان بازاند:
-> Golden Set واقعی، وبحوک bounce/complaint، «حذف همه دادهها» داخل اپ، تأیید SPF/DKIM/DMARC،
-> Play App Signing، انتشار مرحلهای و تست دستگاه Android 16. **استفاده داخلی کنترلشده با همین APK مجاز است.**
+> Golden Set واقعی، وبحوک bounce/complaint، تأیید SPF/DKIM/DMARC، رضایت مستند بهازای هر مخاطب،
+> Play App Signing، انتشار مرحلهای و تست دستگاه Android 16. «حذف همه دادهها» داخل اپ اکنون پیادهسازی شده است.
+> **استفاده داخلی کنترلشده با همین APK مجاز است.**
 
 ---
 
@@ -33,12 +34,13 @@
 - [x] پیوستها بهصورت جریانی و با سقف سخت خوانده میشوند (`readBounded`)
 
 ## ۳. امنیت و حریم خصوصی (P0)
-- [x] `allowBackup=false`؛ `sali.db` و prefs از بکاپ خارجاند (`dataExtractionRules` اضافی نیست ولی allowBackup=false کافی است)
+- [x] `allowBackup=false` **و** `@xml/data_extraction_rules` (Android 12+ cloud backup / device transfer هر دو `exclude domain="root"`)
 - [x] `network_security_config` نصب شد؛ cleartext غیرفعال؛ `android:exported` بررسی شد
 - [x] هیچ کلید API / ایمیل خام / متنی در لاگ، پیام خطا یا artifact نیست (`PrivacyRedactorTest` + ماسک لاگ/export)
 - [x] [`PRIVACY.md`](../PRIVACY.md) (FA/EN) منتشر شد؛ موجودی داده و طرفهای سوم (hcnsec/You.com/Brevo/IMAP) درج شد
 - [x] [`SECURITY.md`](../SECURITY.md) و مسیر گزارش خصوصی موجود است
-- [ ] «حذف همه دادههای من» داخل اپ کار میکند؛ خطمشی نگهداری لاگ اعمال شده
+- [x] «پاکسازی کامل دادههای اپ» داخل تنظیمات با دیالوگ تأیید: `messages` + `logs` + `campaigns` + prefs رمزنگاریشده + session پاک میشوند (`SettingsScreen` / `App.clearAllData`)
+- [ ] خطمشی نگهداری لاگ (حذف خودکار لاگهای قدیمیتر از N روز) هنوز اعمال نشده؛ حذف فایلهای exportشده بر عهده کاربر است
 - [ ] رضایت/رابطه تجاری بهازای هر مخاطب ثبت میشود؛ فرم Data Safety تکمیل شده
 - [ ] SPF / DKIM / DMARC دامنه فرستنده تأیید و تست شدهاند
 

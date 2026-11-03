@@ -9,11 +9,15 @@ import androidx.compose.ui.unit.dp
 import ir.salisec.autosender.App
 import ir.salisec.autosender.R
 import ir.salisec.autosender.data.Prefs
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen(app: App, onBack: () -> Unit) {
     var s by remember { mutableStateOf(app.prefs.load()) }
     var saved by remember { mutableStateOf(false) }
+    var confirmErase by remember { mutableStateOf(false) }
+    var erased by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     ScreenScaffold {
         Title("تنظیمات")
@@ -109,6 +113,35 @@ fun SettingsScreen(app: App, onBack: () -> Unit) {
             saved = true
         }
         if (saved) Chip("ذخیره شد ✓", GreenOk)
+
+        Section("حریم خصوصی و حذف دادهها") {
+            SubTitle("پاکسازی، همه پیامها، لاگها، پیشنویس کمپین، کلیدهای API و فهرست عدم ارسال را از روی دستگاه حذف میکند. فایلهای لاگی که خودتان export کردهاید جداگانه پاک کنید.")
+            BigButton("پاکسازی کامل دادههای اپ", enabled = !erased) { confirmErase = true }
+            if (erased) Chip("همه دادههای محلی پاک شد ✓", GreenOk)
+        }
+
         TextButton(onClick = onBack) { Text("بازگشت") }
+    }
+
+    if (confirmErase) {
+        AlertDialog(
+            onDismissRequest = { confirmErase = false },
+            title = { Text("پاکسازی کامل؟") },
+            text = { Text("این کار برگشتناپذیر است: پیامهای تأییدشده، صف ارسال، لاگها، تنظیمات و کلیدها حذف میشوند. هیچ ارسالی انجام نمیشود.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmErase = false
+                    scope.launch {
+                        app.clearAllData()
+                        s = app.prefs.load()
+                        saved = false
+                        erased = true
+                    }
+                }) { Text("بله، پاک کن", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmErase = false }) { Text("انصراف") }
+            }
+        )
     }
 }
