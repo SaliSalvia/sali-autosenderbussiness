@@ -114,6 +114,8 @@ class SmtpSender : MailSender {
             put("mail.smtp.port", s.smtpPort.toString())
             put("mail.smtp.auth", "true")
             put("mail.smtp.starttls.enable", "true")
+            put("mail.smtp.starttls.required", "true")
+            put("mail.smtp.ssl.checkserveridentity", "true")
             put("mail.smtp.connectiontimeout", "30000")
             put("mail.smtp.timeout", "60000")
         }

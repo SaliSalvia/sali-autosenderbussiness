@@ -13,6 +13,7 @@ import ir.salisec.autosender.data.CompanyContext
 import ir.salisec.autosender.data.Contact
 import ir.salisec.autosender.data.DomainMatch
 import ir.salisec.autosender.data.MIGRATION_2_3
+import ir.salisec.autosender.data.MIGRATION_3_4
 import ir.salisec.autosender.data.Prefs
 import ir.salisec.autosender.mail.InboxClient
 import ir.salisec.autosender.send.SendEngine
@@ -70,11 +71,10 @@ class App : Application() {
         super.onCreate()
         PDFBoxResourceLoader.init(applicationContext)
         db = Room.databaseBuilder(this, AppDatabase::class.java, "sali.db")
-            // Real forward migration for shipped v2 installs. The fallback is
-            // only a last resort for pre-v2 developer installs that never had
-            // a released APK.
-            .addMigrations(MIGRATION_2_3)
-            .fallbackToDestructiveMigration()
+            // Real forward migrations only. Pre-v2 schemas were never shipped
+            // in a released APK, so destructive fallback is removed: a missing
+            // migration must CRASH, never silently wipe user data.
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
             .build()
         prefs = Prefs(this)
         ai = AiClient(ok)

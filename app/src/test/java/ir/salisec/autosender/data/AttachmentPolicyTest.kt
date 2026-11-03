@@ -45,4 +45,21 @@ class AttachmentPolicyTest {
         assertTrue(AttachmentGuard.validateNames(listOf(fa.name, "acme_trial_fa_2.pdf")) != null)
         assertTrue(AttachmentGuard.validateNames(listOf(fa.name, "acme_trial_en.txt")) != null)
     }
+
+
+    @Test
+    fun unmarkedLanguageFilesNeverQualifyAsTrials() {
+        val unmarked = PdfDoc("acme_trial.pdf", "content://unmarked", pages = 2, text = "x")
+        assertTrue(AttachmentPolicy.isTrialName(unmarked.name))
+        assertFalse(AttachmentPolicy.isPersianName(unmarked.name))
+        assertFalse(AttachmentPolicy.isEnglishName(unmarked.name))
+        assertTrue(AttachmentPolicy.selectTrialPair(listOf(unmarked)).isEmpty())
+    }
+
+    @Test
+    fun englishTrialsAreDetectedExplicitly() {
+        assertTrue(AttachmentPolicy.isEnglishName("acme_trial_en.pdf"))
+        assertTrue(AttachmentPolicy.isEnglishName("acme_trial_english.pdf"))
+        assertFalse(AttachmentPolicy.isEnglishName("acme_trial_fa.pdf"))
+    }
 }

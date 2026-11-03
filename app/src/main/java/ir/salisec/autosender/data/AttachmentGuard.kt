@@ -1,76 +1,116 @@
 package ir.salisec.autosender.data
 
 /**
- * Pure-Kotlin (JVM-testable) send-time attachment validation.
- *
- * The AI reads EVERY PDF in a domain folder, but only two 2-page trial PDFs
- * (Persian + English) may ever be attached. This guard runs a second time,
- * immediately before the network call, on the ACTUAL bytes that will be sent.
- *
- * Brevo's conservative documented limits: an attachment should be < 4 MB and
- * the whole email (content + attachments) must stay under 20 MB.
+ * Fail-closed validation of the two exact PDF byte arrays that will be sent.
+ * Page counts and hashes must come from parsing these actual bytes immediately
+ * before the provider request.
  */
 object AttachmentGuard {
     const val MAX_PER_FILE_BYTES = 4L * 1024L * 1024L
     const val MAX_TOTAL_BYTES = 20L * 1024L * 1024L
     const val EXPECTED_PAGES = 2
 
-    /** Cheap check that runs before any file is opened. */
     fun validateNames(names: List<String>): String? {
         if (names.size != 2) {
-            return "تعداد پیوست ${names.size} است؛ فقط همان ۲ نسخه trial مجاز است"
+            return "تعداد پیوست ${names.size} است؛ فقط دو نسخهٔ trial مجاز است"
         }
+
         if (names.any { !it.trim().lowercase().endsWith(".pdf") }) {
-            return "همه پیوستها باید PDF باشند"
+            return "همهٔ پیوست‌ها باید PDF باشند"
         }
-        if (names.any { !AttachmentPolicy.isTrialName(it) || AttachmentPolicy.isFullName(it) }) {
-            return "پیوستها باید دقیقا نسخه trial فارسی و trial انگلیسی باشند"
+
+        if (names.any {
+                !AttachmentPolicy.isTrialName(it) || AttachmentPolicy.isFullName(it)
+            }
+        ) {
+            return "پیوست‌ها باید نسخهٔ trial باشند، نه گزارش کامل"
         }
-        val fa = names.count { AttachmentPolicy.isPersianName(it) }
-        if (fa != 1) return "یک trial فارسی و یک trial انگلیسی لازم است (تشخیص: $fa فارسی)"
+
+        val persianCount = names.count { AttachmentPolicy.isPersianName(it) }
+        val englishCount = names.count { AttachmentPolicy.isEnglishName(it) }
+
+        if (persianCount != 1 || englishCount != 1) {
+            return "نام فایل‌ها باید دقیقاً یک trial فارسی و یک trial انگلیسی را مشخص کند"
+        }
+
         return null
     }
 
     /**
-     * Full check on real bytes. `pages` comes from the PDFBox scan stored at
-     * approval time; a null page count means the old build did not record it.
+     * approvedPages and approvedSha256 are persisted at human approval time.
+     * actualPages must be parsed from payloads immediately before sending.
      */
     fun validateFiles(
         names: List<String>,
-        pages: List<Int?>,
+        approvedPages: List<Int?>,
+        approvedSha256: List<String>,
+        actualPages: List<Int?>,
         payloads: List<ByteArray>,
         perFileCapMb: Int
     ): String? {
-        val nameProblem = validateNames(names)
-        if (nameProblem != null) return nameProblem
-        if (payloads.size != 2) return "پیوستها کامل خوانده نشدند"
+        validateNames(names)?.let { return it }
+
+        if (payloads.size != 2) return "هر دو پیوست باید خوانده شوند"
+        if (approvedPages.size != 2 || actualPages.size != 2) {
+            return "تعداد صفحات هر دو فایل باید قابل تأیید باشد"
+        }
+        if (approvedSha256.size != 2 || approvedSha256.any { it.isBlank() }) {
+            return "هش پیوست‌ها ثبت نشده است؛ پیام را دوباره بررسی و تأیید کنید"
+        }
 
         val configuredCap = perFileCapMb.coerceIn(1, 4) * 1024L * 1024L
         val perFileCap = minOf(MAX_PER_FILE_BYTES, configuredCap)
-        var total = 0L
-        for (i in 0..1) {
-            val bytes = payloads[i]
-            if (!isPdf(bytes)) return "فایل «${names[i]}» یک PDF معتبر نیست (امضای %PDF- ندارد)"
+        var totalBytes = 0L
+
+        for (index in 0..1) {
+            val bytes = payloads[index]
+
+            if (!isPdf(bytes)) {
+                return "فایل «${names[index]}» امضای PDF ندارد"
+            }
+
             if (bytes.size.toLong() >= perFileCap) {
-                return "حجم «${names[i]}» بیش از سقف ${perFileCap / 1024 / 1024} مگابایت است"
+                return "حجم «${names[index]}» باید کمتر از ${perFileCap / 1024 / 1024} مگابایت باشد"
             }
-            val p = pages.getOrNull(i)
-            if (p != null && p != EXPECTED_PAGES) {
-                return "نسخه trial «${names[i]}» $p صفحه دارد؛ فقط نسخه ۲صفحهای مجاز است"
+
+            val approvedPageCount = approvedPages[index]
+                ?: return "تعداد صفحات تأییدشدهٔ «${names[index]}» نامشخص است؛ پیام را دوباره تأیید کنید"
+
+            val actualPageCount = actualPages[index]
+                ?: return "تعداد صفحات واقعی «${names[index]}» قابل خواندن نیست"
+
+            if (approvedPageCount != EXPECTED_PAGES || actualPageCount != EXPECTED_PAGES) {
+                return "فایل «${names[index]}» باید دقیقاً دو صفحه داشته باشد"
             }
-            total += bytes.size
+
+            val actualHash = sha256(payloads[index])
+            if (!actualHash.equals(approvedSha256[index], ignoreCase = true)) {
+                return "فایل «${names[index]}» پس از تأیید تغییر کرده است؛ پیام را دوباره بررسی کنید"
+            }
+
+            totalBytes += bytes.size
         }
-        if (total >= MAX_TOTAL_BYTES) return "حجم کل پیوستها بیش از ۲۰ مگابایت است"
+
+        if (totalBytes >= MAX_TOTAL_BYTES) {
+            return "حجم کل پیوست‌ها باید کمتر از ۲۰ مگابایت باشد"
+        }
+
         return null
     }
 
-    /** PDF files start with the literal header `%PDF-`. */
-    fun isPdf(bytes: ByteArray): Boolean {
-        if (bytes.size < 5) return false
-        return bytes[0] == '%'.code.toByte() &&
+    fun isPdf(bytes: ByteArray): Boolean =
+        bytes.size >= 5 &&
+            bytes[0] == '%'.code.toByte() &&
             bytes[1] == 'P'.code.toByte() &&
             bytes[2] == 'D'.code.toByte() &&
             bytes[3] == 'F'.code.toByte() &&
             bytes[4] == '-'.code.toByte()
+
+    private fun sha256(bytes: ByteArray): String {
+        val digest = java.security.MessageDigest
+            .getInstance("SHA-256")
+            .digest(bytes)
+
+        return digest.joinToString("") { byte -> "%02x".format(byte) }
     }
 }

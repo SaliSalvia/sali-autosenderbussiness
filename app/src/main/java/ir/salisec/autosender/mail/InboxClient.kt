@@ -26,6 +26,7 @@ class InboxClient {
             put("mail.imaps.port", s.imapPort.toString())
             put("mail.imaps.connectiontimeout", "20000")
             put("mail.imaps.timeout", "30000")
+            put("mail.imaps.ssl.checkserveridentity", "true")
         })
 
     suspend fun list(s: Settings, limit: Int = 50): List<InboxMessage> = withContext(Dispatchers.IO) {

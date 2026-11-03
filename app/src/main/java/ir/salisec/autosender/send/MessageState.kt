@@ -25,7 +25,8 @@ object MessageState {
         DRAFT to setOf(APPROVED),
         APPROVED to setOf(QUEUED, SENDING, SKIPPED, DRAFT),
         QUEUED to setOf(SENDING, SKIPPED, DRAFT, APPROVED),
-        SENDING to setOf(SENT, FAILED, SKIPPED, UNCERTAIN, QUEUED),
+        // A SENDING message can never silently return to QUEUED.
+        SENDING to setOf(SENT, FAILED, SKIPPED, UNCERTAIN),
         FAILED to setOf(QUEUED, DRAFT),
         UNCERTAIN to setOf(SENT, SKIPPED, QUEUED, DRAFT),
         SENT to emptySet(),

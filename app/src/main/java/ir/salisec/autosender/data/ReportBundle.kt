@@ -89,7 +89,12 @@ object AttachmentPolicy {
         "full", "complete", "final", "paid", "premium", "detailed",
         "کامل", "نسخه کامل", "نسخه نهایی", "پولی", "جامع"
     )
-    private val faMarkers = listOf("_fa", "-fa", "fa.", "fa_", "_fa.", "persian", "farsi", "فارسی")
+    private val faMarkers = listOf(
+        "_fa", "-fa", "fa.", "fa_", "_fa.", "persian", "farsi", "فارسی"
+    )
+    private val enMarkers = listOf(
+        "_en", "-en", "en.", "en_", "_en.", "english", "انگلیسی"
+    )
 
     fun isTrialName(name: String): Boolean {
         val n = normalize(name)
@@ -103,7 +108,12 @@ object AttachmentPolicy {
 
     fun isPersianName(name: String): Boolean {
         val n = normalize(name)
-        return faMarkers.any { n.contains(it) } && !n.contains("_en") && !n.contains("-en")
+        return faMarkers.any { n.contains(it) }
+    }
+
+    fun isEnglishName(name: String): Boolean {
+        val n = normalize(name)
+        return enMarkers.any { n.contains(it) }
     }
 
     /** Human-readable file name from a SAF content:// URI. */
@@ -125,14 +135,22 @@ object AttachmentPolicy {
      *  A document qualifies ONLY if it is explicitly a trial (or exactly 2 pages)
      *  and it is NOT a full/paid report. */
     fun selectTrialPair(pdfs: List<PdfDoc>): List<PdfDoc> {
-        val candidates = pdfs.filter { d ->
-            d.readOk && !isFullName(d.name) && (isTrialName(d.name) || d.pages == 2)
+        val candidates = pdfs.filter { document ->
+            document.readOk &&
+                !isFullName(document.name) &&
+                (isTrialName(document.name) || document.pages == 2) &&
+                (isPersianName(document.name) || isEnglishName(document.name))
         }
-        fun pick(persian: Boolean): PdfDoc? = candidates
-            .filter { isPersianName(it.name) == persian }
+        fun pickPersian(): PdfDoc? = candidates
+            .filter { isPersianName(it.name) }
             .sortedWith(compareByDescending<PdfDoc> { score(it) }.thenBy { it.name })
             .firstOrNull()
-        return listOfNotNull(pick(true), pick(false))
+
+        fun pickEnglish(): PdfDoc? = candidates
+            .filter { isEnglishName(it.name) }
+            .sortedWith(compareByDescending<PdfDoc> { score(it) }.thenBy { it.name })
+            .firstOrNull()
+        return listOfNotNull(pickPersian(), pickEnglish())
     }
 
     private fun score(d: PdfDoc): Int {
