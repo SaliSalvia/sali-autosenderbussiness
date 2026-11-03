@@ -3,7 +3,11 @@
 اپلیکیشن اندروید (Kotlin + Jetpack Compose) برای فروش گزارش‌های ممیزی امنیتی SaliSecure
 از طریق کمپین ایمیلی **شخصی سازی شده، بازبینی شده توسط انسان و مبتنی بر داده واقعی**.
 
-> 📘 سند مرجع کامل و به روز: **[docs/MASTER_BLUEPRINT.md](docs/MASTER_BLUEPRINT.md)**
+> 📘 سند مرجع معماری و خطوط قرمز: **[docs/MASTER_BLUEPRINT.md](docs/MASTER_BLUEPRINT.md)**
+> 🗺️ نقشه راه «محصول کلاس جهانی / آماده انتشار»: **[docs/WORLD_CLASS_ROADMAP.md](docs/WORLD_CLASS_ROADMAP.md)**
+> ✅ چکلیست Go/No-Go انتشار: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) · تاریخچه: [CHANGELOG.md](CHANGELOG.md) · امنیت: [SECURITY.md](SECURITY.md)
+
+**وضعیت:** `v2.0` نخستین نسخه **قابل نصب و کارآمد** است (هسته محصول و خطوط قرمز پیادهسازی شدهاند). برای رسیدن به سطح **production / کلاس جهانی** — تستها، پایداری وضعیت، idempotency، `targetSdk=36`، حریم خصوصی، AAB امضاشده و انتشار مرحلهای — نقشه راه ۹ هفتهای بالا ملاک است. بیلد سبز لازم است، نه کافی.
 
 ## اصول غیرقابل تغییر
 - فقط لیست مخاطبان خود کاربر (چسباندن متن / CSV). هیچ scraping یا جمع آوری خودکار داده شخصی وجود ندارد.
