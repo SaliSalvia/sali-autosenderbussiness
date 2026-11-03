@@ -1,40 +1,64 @@
 # SaliBussiness — SaliSecure Outreach Automator
 
-اپلیکیشن اندروید (Kotlin + Jetpack Compose) برای فروش گزارش‌های ممیزی امنیتی SaliSecure
-از طریق کمپین ایمیلی **شخصی سازی شده، بازبینی شده توسط انسان و مبتنی بر داده واقعی**.
+اپلیکیشن اندروید (Kotlin + Jetpack Compose Material 3) برای فروش گزارشهای ممیزی امنیتی SaliSecure
+از طریق کمپین ایمیلی **شخصیسازیشده، بازبینیشده توسط انسان و مبتنی بر داده واقعی**.
 
 > 📘 سند مرجع معماری و خطوط قرمز: **[docs/MASTER_BLUEPRINT.md](docs/MASTER_BLUEPRINT.md)**
 > 🗺️ نقشه راه «محصول کلاس جهانی / آماده انتشار»: **[docs/WORLD_CLASS_ROADMAP.md](docs/WORLD_CLASS_ROADMAP.md)**
-> ✅ چکلیست Go/No-Go انتشار: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) · تاریخچه: [CHANGELOG.md](CHANGELOG.md) · امنیت: [SECURITY.md](SECURITY.md)
+> ✅ [چکلیست Go/No-Go](docs/RELEASE_CHECKLIST.md) · [تاریخچه](CHANGELOG.md) · [امنیت](SECURITY.md) · [حریم خصوصی FA/EN](PRIVACY.md) · [مشارکت](CONTRIBUTING.md)
 
-**وضعیت:** `v2.0` نخستین نسخه **قابل نصب و کارآمد** است (هسته محصول و خطوط قرمز پیادهسازی شدهاند). برای رسیدن به سطح **production / کلاس جهانی** — تستها، پایداری وضعیت، idempotency، `targetSdk=36`، حریم خصوصی، AAB امضاشده و انتشار مرحلهای — نقشه راه ۹ هفتهای بالا ملاک است. بیلد سبز لازم است، نه کافی.
+**وضعیت (versionName `2.0.0` / versionCode `3`):** نسخه قابلنصب و سختسازیشده. `compileSdk/targetSdk = 36`،
+بیلد CI شامل تست واحد + lint + R8 release + AAB، صف ارسال idempotent با قفل/lease، لاگ بدون PII،
+`allowBackup=false`، و داشبورد کاری با **یک دکمه ارسال گروهی** (فقط پیامهای تأییدشده).
+بیلد سبز لازم است، نه کافی؛ بندهای باقیمانده در [چکلیست انتشار](docs/RELEASE_CHECKLIST.md) مشخصاند.
 
 ## اصول غیرقابل تغییر
-- فقط لیست مخاطبان خود کاربر (چسباندن متن / CSV). هیچ scraping یا جمع آوری خودکار داده شخصی وجود ندارد.
-- **هیچ ایمیلی بدون تأیید صریح انسانی ارسال نمیشود** (پیش نویس، ویرایش، تأیید).
+- فقط لیست مخاطبان خود کاربر (چسباندن متن / CSV). هیچ scraping یا جمعآوری خودکار داده شخصی وجود ندارد.
+- **هیچ ایمیلی بدون تأیید صریح انسانی ارسال نمیشود**؛ ویرایش پس از تأیید، approval را باطل میکند.
 - متن فقط از داده واقعی همان گزارش ساخته میشود؛ `QualityGate` محلی جلوی هر عدد/ادعای ساختگی را میگیرد.
 - You.com فقط زمینه عمومی شرکت (صنعت/محصولات) میدهد؛ هرگز داده شخصی.
 - بدون دور زدن فیلتر اسپم، بدون هدر جعلی، بدون چرخش قالب. فاصله ۶۰–۹۰ ثانیه و سقف روزانه = بهداشت ارسال.
 - Brevo API (پیشفرض) یا SMTP اختصاصی؛ IMAP داخل اپ برای پاسخها؛ درخواست حذف بلافاصله ثبت میشود.
 
-## قانون طلایی PDFها (نسخه جدید)
+## قانون طلایی PDFها
 - **AI تمام PDFهای پوشه هر دامنه را میخواند** تا پیام را طراحی کند.
-- **فقط و فقط دو نسخه trial دوصفحهای (فارسی + انگلیسی) پیوست و ارسال میشوند** — هیچ فایل دیگری ارسال نمیشود.
+- **فقط و فقط دو نسخه trial دوصفحهای (فارسی + انگلیسی) پیوست و ارسال میشوند**.
+- پیش از هر network call، `AttachmentGuard` امضای `%PDF-`، تعداد صفحات (`2`)، نام trial،
+  ≤ ۴MB برای هر فایل و ≤ ۲۰MB برای کل ایمیل را روی **بایتهای واقعی** چک میکند.
 - نامگذاری پیشنهادی: `..._trial_fa.pdf` و `..._trial.pdf`؛ گزارش کامل `..._full.pdf` هرگز پیوست نمیشود.
 
-## ساخت APK
-✅ **آخرین بیلد سبز است**: [ران ۴۱۵۵۲۹۷۹۷۷۴](https://github.com/SaliSalvia/sali-autosenderbussiness/actions/runs/41552979774) — دو APK نصبپذیر ۲۷ مگابایتی در artifact `SaliBussiness-APK`.
+## ساخت APK / AAB در GitHub Actions
+`GitHub → Actions → Build SaliBussiness APK` روی `push` به `main` و `arena/**`، **همه PRها به `main`**،
+تگهای `v*` و `workflow_dispatch` اجرا میشود. مراحل:
 
-`GitHub → Actions → Build SaliBussiness APK` (روی `main` و شاخههای `arena/**` به صورت خودکار هم اجرا میشود).
-خروجی: `SaliBussiness.apk` (قابل نصب) + `SaliBussiness-debug.apk`.
-بدون نیاز به سیکرت؛ در صورت تنظیم `SALI_KEYSTORE_*` نسخه ریلیس امضا شده ساخته میشود.
-در صورت شکست، artifact `build-logs` حاوی متن کامل خطاهای کامپایلر آپلود میشود.
+`clean test lintDebug assembleDebug assembleRelease bundleRelease` (JDK 17، Gradle پینشده `8.11.1`،
+نصب صریح `platforms;android-36` / `build-tools;36.0.0`).
+
+خروجی در artifact **`SaliBussiness-APK`**:
+`SaliBussiness.apk`، `SaliBussiness-debug.apk`، `SaliBussiness.aab` و `SHA256SUMS.txt`.
+روی `main` انتشار خودکار Release با تگ `latest` هم انجام میشود.
+
+- بدون سیکرت، APK دیباگ نصبپذیر است و `SaliBussiness.apk` کپی همان بیلد دیباگ است — **هرگز بهعنوان ریلیس امضاشده معرفی نمیشود**.
+- با چهار سیکرت `SALI_KEYSTORE_BASE64`, `SALI_KEYSTORE_PASSWORD`, `SALI_KEY_ALIAS`, `SALI_KEY_PASSWORD`
+  نسخه release امضاشده ساخته میشود.
+- هنگام شکست، artifact `build-logs` حاوی `checks.log` / `build.log` / `release.log` و گزارشهای lint/test آپلود میشود.
+- ابزار ساخت pin شده است (`build.gradle.kts` + `gradle/wrapper/gradle-wrapper.properties`)؛
+  ارتقای majorـهای AGP/Gradle/Kotlin باید **هماهنگ** و طی یک PR با بیلد سبز انجام شود، نه تکبهتک توسط Dependabot.
+
+## ارسال ایمن (چرا تکراری نمیشود)
+- هر پیام یک **UUID پایدار** دارد: `headers.idempotencyKey` در Brevo (TTL ۳۰ دقیقهای) و `Message-ID` قطعی در SMTP.
+- پاسخ `duplicate_parameter` یعنی «ارسال اول انجام شده» → `SENT`، نه تلاش مجدد.
+- timeout / 5xx / قطع شبکه → وضعیت **`UNCERTAIN`** و توقف خودکار؛ تصمیم با انسان است.
+- فقط ردیفهای `APPROVED/QUEUED` با **claim/lease اتمی** تصاحب میشوند؛ اجرای کشتهشده پیام `SENDING` را رها نمیکند.
+- پیش از هر ارسال: opt-out، گیت صحت، شواهد و پیوستها دوباره بررسی میشوند.
 
 ## شروع سریع
 1. کلید Brevo، کلید hcnsec و App Password ایمیل را در تنظیمات وارد و ذخیره کن.
 2. پوشه `sitest` را یکبار با SAF انتخاب کن (کنار هر PDF بهتر است فایل `*.json` sidecar باشد: [نمونه](examples/sidecar.example.json)).
 3. جریان ۵ مرحلهای: دامنهها ← مخاطبان ← گزارشها ← تولید/بازبینی/تأیید ← ارسال.
-4. صندوق ورودی برای پاسخها، خط لوله فروش برای پیگیریها و وضعیت سرنخها.
+4. در داشبورد یا صف ارسال، «ارسال همه پیامهای تأییدشده» را بزن و دیالوگ را تأیید کن.
+5. صندوق ورودی برای پاسخها، خط لوله فروش برای پیگیریها و وضعیت سرنخها.
 
 ## نکته حقوقی
-ارسال فقط به سرنخهایی که رابطه تجاری / رضایت دارند؛ unsubscribe در پاسخ فورا در فهرست عدم ارسال ثبت میشود.
+ارسال فقط به سرنخهایی که رابطه تجاری / رضایت دارند؛ دامنه فرستنده باید SPF/DKIM/DMARC داشته باشد؛
+unsubscribe در پاسخ فورا در فهرست عدم ارسال ثبت میشود. جزئیات: [`PRIVACY.md`](PRIVACY.md).

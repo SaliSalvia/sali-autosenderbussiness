@@ -1,6 +1,8 @@
 # 🗺️ نقشه راه SaliBussiness: از نمونه کارآمد تا محصول کلاس جهانی (v2.0 → v3.0)
 
-**تاریخ:** ۲۰۲۶-۱۱-۰۳ · **وضعیت:** سند برنامهریزی قابل اجرا · **مبنای ارزیابی:** `main` در `38ff5f8` (نسخه v2.0، بیلد سبز، APK نصبپذیر)
+**تاریخ:** ۲۰۲۶-۱۱-۰۳ · **وضعیت:** سند برنامهریزی قابل اجرا + **فاز ۰ و بخشی از فازهای ۱–۴ اجرا شدهاند** · **مبنای ارزیابی:** `main` در `38ff5f8` (نسخه v2.0، بیلد سبز، APK نصبپذیر)
+
+> 📌 **بهروزرسانی اجرا (versionCode 3):** بیلد شکسته `main` ناشی از PRهای Dependabot رفع شد (AGP 8.9.1 / Gradle 8.11.1 / Kotlin 2.0.21 / `compileSdk=targetSdk=36`)؛ CI اکنون روی **PRها** هم `clean test lintDebug assembleDebug assembleRelease bundleRelease` اجرا میکند؛ تست واحد، Golden Set مصنوعی، `MIGRATION_2_3`، claim/lease، idempotency UUID + حالت `UNCERTAIN`، `AttachmentGuard`، `PrivacyRedactor`، `allowBackup=false` + Network Security Config، R8، `PRIVACY.md`/`CONTRIBUTING.md` و داشبورد کاری با دکمه ارسال گروهی اضافه شدند. **همچنان No-Go برای Play** — بندهای باز در [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) و [`CHANGELOG.md`](../CHANGELOG.md).
 **پیشنیاز مطالعه:** [`docs/MASTER_BLUEPRINT.md`](MASTER_BLUEPRINT.md) (مرجع معماری و خطوط قرمز) · [`docs/RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) (چکلیست Go/No-Go)
 
 > **یک جمله:** «کلاس جهانی» در این محصول یعنی **ابزاری که بتوان بدون نگرانی به یک تیم فروش سپرد**: دادهاش گم نمیشود، ایمیلی دوباره ارسال نمیشود، عددی جعل نمیشود، مخاطبی که «حذف» گفته هرگز پیام نمیگیرد، و انتشارش قابلیت تکرار و برگشت دارد. نه یعنی «ارسال بیشتر» یا «هوشمندتر شدن فیلترشکنی».

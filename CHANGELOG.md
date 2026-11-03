@@ -1,9 +1,40 @@
 # Changelog
 
 همه تغییرات قابلتوجه این پروژه در این فایل ثبت میشود. قالب بر اساس [Keep a Changelog](https://keepachangelog.com/fa/1.1.0/) و نسخهدهی [Semantic Versioning](https://semver.org/lang/fa/) است.
-> نکته: تا قبل از v2.0، `versionCode`/`versionName` داخل `app/build.gradle.kts` همچنان `1 / 1.0.0` بود؛ همگامسازی آن با تگها یکی از بندهای [`docs/WORLD_CLASS_ROADMAP.md`](docs/WORLD_CLASS_ROADMAP.md) فاز ۰ است.
+> ✅ همگامسازی انجام شد: `versionCode = 3` و `versionName = "2.0.0"` در `app/build.gradle.kts` (پیشتر `1 / 1.0.0` بود). بند فاز ۰ نقشه راه بسته شد.
 
-## [Unreleased]
+## [Unreleased] — سختسازی 2.1 / Hardening (versionCode 3)
+### Fixed — رگرسیون `main`
+- **بیلد شکسته `main` رفع شد.** PRهای Dependabot بدون اینکه CI روی `pull_request` اجرا شود ادغام شده بودند و `AGP 9.5.0` + `Kotlin 2.4.21` + `Gradle 8.9` + `core-ktx 1.19.1` را روی `compileSdk 34` گذاشته بودند. AGP 9.5 به Gradle ≥ 9.6 و built-in Kotlin نیاز دارد و `core-ktx 1.19.1` به `compileSdk ≥ 37`.
+- ابزار ساخت به یک مجموعه **سازگار و پینشده** برگشت/ارتقا یافت: AGP `8.9.1` + Gradle `8.11.1` + Kotlin `2.0.21` + `compileSdk/targetSdk = 36` + `buildTools 36.0.0` + Compose BOM `2024.10.01`.
+- workflow اکنون روی `pull_request` به `main` و تگهای `v*` هم اجرا میشود؛ `dependabot.yml` از merge تکبهتک major ابزار ساخت جلوگیری میکند.
+
+### Added — ایمنی ارسال و پایداری
+- `MessageState` (DRAFT → APPROVED → QUEUED → SENDING → SENT/FAILED/SKIPPED/**UNCERTAIN**) و **claim/lease اتمی** در Room: فقط ردیفهای `APPROVED/QUEUED` قابل تصاحباند و اجرای کشتهشده پیام `SENDING` را رها نمیکند.
+- **idempotency UUID پایدار** بهازای هر پیام: `headers.idempotencyKey` در Brevo (پاسخ `duplicate_parameter` = موفقیت، نه retry) و `Message-ID` قطعی در SMTP.
+- نتیجه **گمشده** (timeout/5xx/قطع شبکه) دیگر هرگز بهصورت خودکار retry نمیشود → وضعیت `UNCERTAIN` و تصمیم انسان.
+- `AttachmentGuard`: بررسی **بایتهای واقعی** پیش از network call — امضای `%PDF-`، دقیقاً ۲ نسخه trial (فا + en)، `pages == 2`، ≤ ۴MB/فایل و ≤ ۲۰MB کل (مستند محافظهکارانه Brevo). خواندن جریانی با سقف سخت بهجای `readBytes()` بینهایت.
+- `PrivacyRedactor`: ماسک ایمیل در لاگ/UI/خروجی لاگ، حذف کلیدها و ایمیلها از پیامهای خطا و `lastError`.
+- ویرایش متن **پس از تأیید**، approval را باطل و ردیف صف را `DRAFT` میکند (هیچ نسخه تأییدنشدهای ارسال نمیشود).
+- **`MIGRATION_2_3`** واقعی Room جدول `campaigns` برای ذخیره پیشنویس کمپین (دامنهها/مخاطبان/انتخاب/زمینه عمومی)، بدون متن PDF و بدون کلید.
+- تست واحد JVM (بدون امولاتور): `ContactsParser`, `DomainValidator`, `QualityGate`, `AttachmentPolicy`, `AttachmentGuard`, `MessageState`, `PrivacyRedactor` و **Golden Set** مصنوعی/بینامشده.
+
+### Added — محصول و UI
+- داشبورد کاری شبیه Thunderbird: شمارنده دامنه/تأییدشده/وضعیت صف، و **یک دکمه «ارسال همه پیامهای تأییدشده»** با دیالوگ تأیید (فقط سرویس صف را استارت میکند، بازبینی را دور نمیزند).
+- کنسول صف: وضعیت هر ایمیل، مکث/ادامه/لغو، لاگ زنده، خروجی لاگ بدون PII.
+- تم Material 3 روشن/تیره + RTL ثابت، رشتههای UI در `strings.xml`، `contentDescription` برای آیکونها، `ContextCompat.startForegroundService` (سازگار با minSdk 24).
+
+### Changed — امنیت و انتشار
+- `allowBackup=false`، `usesCleartextTraffic=false`، `res/xml/network_security_config.xml`.
+- `isMinifyEnabled=true` + `isShrinkResources=true` با قواعد R8 محافظهکارانه؛ `lint { abortOnError = false }` بهعنوان گزارش.
+- `versionCode = 3`, `versionName = "2.0.0"`, `targetSdk/compileSdk = 36` (الزام Play از ۲۰۲۶-۰۸-۳۱).
+- CI: `clean test lintDebug assembleDebug assembleRelease bundleRelease`، نصب صریح `platforms;android-36`، artifact `SaliBussiness-APK` شامل APK + AAB + `SHA256SUMS.txt`، Release `latest` فقط روی `main`، امضای ریلیس فقط با چهار سیکرت `SALI_KEYSTORE_*`.
+- `SECURITY.md` بهوضعیت جدید بهروز شد؛ [`PRIVACY.md`](PRIVACY.md) (FA/EN) و [`CONTRIBUTING.md`](CONTRIBUTING.md) اضافه شدند.
+
+### Known limitations (باقیمانده)
+Golden Set فعلاً **مصنوعی** است (نمونه واقعی بینامشده در مخزن قرار نمیگیرد)؛ دکمه «حذف همه دادههای من» داخل اپ، وبحوک bounce/complaint، detekt/ktlint، KSP، AAB/Play App Signing امضاشده و تأیید عملی SPF/DKIM/DMARC هنوز انجام نشدهاند. فاز ۰ نقشه راه بهمعنای «آماده Play» نیست.
+
+## [Unreleased] — اسناد نقشه راه
 ### Added
 - [`docs/WORLD_CLASS_ROADMAP.md`](docs/WORLD_CLASS_ROADMAP.md): نقشه راه ۹ هفتهای رسیدن به محصول کلاس جهانی/آماده انتشار، شامل ارزیابی baseline، شکافهای P0، ماتریس ریسک، KPI/SLO و فهرست Issueها.
 - [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md): چکلیست Go/No-Go برای انتشار.

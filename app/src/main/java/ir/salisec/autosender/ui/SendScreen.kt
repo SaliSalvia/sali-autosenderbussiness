@@ -28,7 +28,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -230,7 +229,7 @@ fun SendScreen(app: App, onBack: () -> Unit) {
 
 @Composable
 private fun StatusChip(status: String) {
-    val (label, color): Pair<String, Color> = when (status) {
+    val (label, color) = when (status) {
         MessageState.APPROVED -> stringResource(R.string.status_approved) to GreenOk
         MessageState.QUEUED -> stringResource(R.string.status_queued) to MaterialTheme.colorScheme.primary
         MessageState.SENDING -> stringResource(R.string.status_sending) to OrangeWarn
