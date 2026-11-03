@@ -11,8 +11,8 @@
 // and it requires Gradle >= 8.11.1. Everything else stays on the versions that
 // already produced a green APK, so the release stays reproducible.
 plugins {
-    id("com.android.application") version "8.9.1" apply false
-    id("org.jetbrains.kotlin.android") version "2.0.21" apply false
-    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
-    id("org.jetbrains.kotlin.kapt") version "2.0.21" apply false
+    id("com.android.application") version "8.13.2" apply false
+    id("org.jetbrains.kotlin.android") version "2.4.21" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.4.21" apply false
+    id("org.jetbrains.kotlin.kapt") version "2.4.21" apply false
 }
