@@ -63,10 +63,10 @@ android {
 dependencies {
     // Pinned to the set that already produced a green APK. Major upgrades are
     // intentionally not auto-merged: see root build.gradle.kts and dependabot.yml.
-    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.core:core-ktx:1.19.1")
     implementation("androidx.activity:activity-compose:1.9.3")
 
-    val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
@@ -77,13 +77,13 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
 
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
-    kapt("androidx.room:room-compiler:2.6.1")
+    implementation("androidx.room:room-runtime:2.8.5")
+    implementation("androidx.room:room-ktx:2.8.5")
+    kapt("androidx.room:room-compiler:2.8.5")
 
-    implementation("androidx.datastore:datastore-preferences:1.1.1")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
-    implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("androidx.datastore:datastore-preferences:1.3.0")
+    implementation("androidx.security:security-crypto:1.1.0")
+    implementation("androidx.documentfile:documentfile:1.1.0")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
