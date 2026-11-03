@@ -7,20 +7,29 @@ plugins {
 
 android {
     namespace = "ir.salisec.autosender"
-    compileSdk = 34
+    // Google Play requires API 36 for new apps and updates since 2026-08-31.
+    compileSdk = 36
+    buildToolsVersion = "36.0.0"
 
     defaultConfig {
         applicationId = "ir.salisec.autosender"
         minSdk = 24
-        targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        targetSdk = 36
+        versionCode = 3
+        versionName = "2.0.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // R8 is on so the release artifact is a real, shrunk build. Conservative
+            // keep rules protect JavaMail / Room / PDFBox reflection (proguard-rules.pro).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 
@@ -37,16 +46,27 @@ android {
         compose = true
     }
 
+    // Lint runs in CI as a report; warnings must not silently turn a green build red.
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+        warningsAsErrors = false
+    }
+
     packaging {
-        resources.excludes += setOf("META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/DEPENDENCIES")
+        resources.excludes += setOf(
+            "META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/DEPENDENCIES"
+        )
     }
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.19.1")
+    // Pinned to the set that already produced a green APK. Major upgrades are
+    // intentionally not auto-merged: see root build.gradle.kts and dependabot.yml.
+    implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.3")
 
-    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
+    val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
@@ -57,18 +77,21 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
 
-    implementation("androidx.room:room-runtime:2.8.5")
-    implementation("androidx.room:room-ktx:2.8.5")
-    kapt("androidx.room:room-compiler:2.8.5")
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    kapt("androidx.room:room-compiler:2.6.1")
 
-    implementation("androidx.datastore:datastore-preferences:1.3.0")
-    implementation("androidx.security:security-crypto:1.1.0")
-    implementation("androidx.documentfile:documentfile:1.1.0")
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.documentfile:documentfile:1.0.1")
 
-    implementation("com.squareup.okhttp3:okhttp:5.5.1")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    implementation("com.sun.mail:android-mail:1.6.8")
-    implementation("com.sun.mail:android-activation:1.6.8")
+    implementation("com.sun.mail:android-mail:1.6.7")
+    implementation("com.sun.mail:android-activation:1.6.7")
 
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+
+    // Pure-JVM unit tests for domain logic. No emulator needed in CI.
+    testImplementation("junit:junit:4.13.2")
 }

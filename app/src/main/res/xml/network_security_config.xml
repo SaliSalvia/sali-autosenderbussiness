@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      All configured endpoints (Brevo, hcnsec, You.com) are HTTPS. Cleartext is
+      disabled so a mistyped http:// endpoint fails closed instead of leaking
+      API keys and recipient data in plaintext.
+    -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

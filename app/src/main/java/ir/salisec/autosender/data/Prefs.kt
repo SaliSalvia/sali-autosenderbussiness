@@ -43,8 +43,12 @@ data class Settings(
     val jitterSeconds: Int = 25,
     val dailyCap: Int = 100,
     // attachment policy
+    /** Kept for settings compatibility; the exact-two-trial rule is now
+     *  unconditional in AttachmentGuard and CANNOT be disabled. */
     val enforceTrialAttachments: Boolean = true,
-    val maxAttachmentMb: Int = 8,
+    /** Per-file cap in MB. Brevo documents < 4 MB per attachment and a 20 MB
+     *  total email limit; the guard enforces both. */
+    val maxAttachmentMb: Int = 4,
     val unsubscribeFooter: String = "اگر تمایلی به دریافت این گزارش‌ها ندارید، کافی است با واژه «حذف» پاسخ دهید؛ بلافاصله از فهرست حذف می‌شوید.",
     // suppression list (opt-out honouring), comma-separated emails and domains
     val suppressed: String = "",
@@ -89,7 +93,7 @@ class Prefs(context: Context) {
         jitterSeconds = sp.getInt("jitterSeconds", 25),
         dailyCap = sp.getInt("dailyCap", 100),
         enforceTrialAttachments = sp.getBoolean("enforceTrialAttachments", true),
-        maxAttachmentMb = sp.getInt("maxAttachmentMb", 8),
+        maxAttachmentMb = sp.getInt("maxAttachmentMb", 4).coerceIn(1, 4),
         unsubscribeFooter = sp.getString("unsubscribeFooter", DEFAULT_FOOTER)!!.ifBlank { DEFAULT_FOOTER },
         suppressed = sp.getString("suppressed", "")!!,
         sitestFolderUri = sp.getString("sitestFolderUri", "")!!

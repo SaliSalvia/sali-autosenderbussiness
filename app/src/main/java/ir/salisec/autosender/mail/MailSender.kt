@@ -1,6 +1,7 @@
 package ir.salisec.autosender.mail
 
 import ir.salisec.autosender.data.OutgoingMessage
+import ir.salisec.autosender.data.PrivacyRedactor
 import ir.salisec.autosender.data.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -10,6 +11,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.util.Date
 import java.util.Properties
 import java.util.concurrent.TimeUnit
@@ -27,8 +29,25 @@ interface MailSender {
     suspend fun send(s: Settings, msg: OutgoingMessage)
 }
 
+/** Brevo already processed this exact idempotency key. NOT an error to retry. */
+class DuplicateSendException : RuntimeException("duplicate_parameter")
+
+/** The request may have been accepted but the response was lost. Never retry
+ *  automatically: the queue moves to UNCERTAIN and a human decides. */
+class AmbiguousSendException(message: String) : RuntimeException(message)
+
+private fun looksAmbiguous(text: String?): Boolean {
+    if (text == null) return true
+    val t = text.lowercase()
+    return listOf(
+        "timeout", "timed out", "socket", "connection", "broken pipe", "eof",
+        "unexpected end", "network", "resolve host", "read timed out", "5xx"
+    ).any { t.contains(it) }
+}
+
 /** Brevo transactional HTTPS API - the recommended sender.
- *  No fake headers, no spoofing: sender/replyTo are the user's real identity. */
+ *  No fake headers, no spoofing: sender/replyTo are the user's real identity.
+ *  A stable `headers.idempotencyKey` (UUID) makes retries duplicate-safe. */
 class BrevoSender(private val client: OkHttpClient) : MailSender {
     override suspend fun send(s: Settings, msg: OutgoingMessage) = withContext(Dispatchers.IO) {
         val o = JSONObject()
@@ -38,6 +57,13 @@ class BrevoSender(private val client: OkHttpClient) : MailSender {
             .put("htmlContent", html(msg))
             .put("textContent", msg.textBody)
             .put("replyTo", JSONObject().put("email", s.replyTo.ifBlank { s.fromEmail }))
+
+        // Brevo's documented idempotency: a UUID in the `headers` object,
+        // remembered for 30 minutes. A repeat returns 400 duplicate_parameter.
+        if (msg.idempotencyKey.isNotBlank()) {
+            o.put("headers", JSONObject().put("idempotencyKey", msg.idempotencyKey))
+        }
+
         if (msg.attachments.isNotEmpty()) {
             val arr = JSONArray()
             for ((name, bytes) in msg.attachments) {
@@ -55,15 +81,32 @@ class BrevoSender(private val client: OkHttpClient) : MailSender {
             .header("Content-Type", "application/json")
             .post(o.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        client.newBuilder().callTimeout(90, TimeUnit.SECONDS).build().newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) {
-                throw RuntimeException("Brevo " + resp.code + ": " + (resp.body?.string()?.take(300) ?: ""))
+        try {
+            client.newBuilder().callTimeout(90, TimeUnit.SECONDS).build().newCall(req).execute().use { resp ->
+                val body = resp.body?.string()?.take(600) ?: ""
+                if (resp.code == 400 && body.contains("duplicate_parameter", ignoreCase = true)) {
+                    throw DuplicateSendException()
+                }
+                if (!resp.isSuccessful) {
+                    val clean = PrivacyRedactor.redact(body).take(300)
+                    if (resp.code >= 500) throw AmbiguousSendException("Brevo ${resp.code}: $clean")
+                    throw RuntimeException("Brevo ${resp.code}: $clean")
+                }
             }
+        } catch (e: DuplicateSendException) {
+            throw e
+        } catch (e: AmbiguousSendException) {
+            throw e
+        } catch (e: IOException) {
+            // Timeout / reset / DNS: the server may already have accepted the send.
+            throw AmbiguousSendException(PrivacyRedactor.redact(e.message))
         }
     }
 }
 
-/** Plain SMTP sender (custom domain, STARTTLS). */
+/** Plain SMTP sender (custom domain, STARTTLS). SMTP has no server-side
+ *  idempotency, so the same UUID becomes a deterministic RFC Message-ID and
+ *  ambiguous failures are never auto-retried. */
 class SmtpSender : MailSender {
     override suspend fun send(s: Settings, msg: OutgoingMessage) = withContext(Dispatchers.IO) {
         val props = Properties().apply {
@@ -83,6 +126,9 @@ class SmtpSender : MailSender {
         mm.subject = msg.subject
         mm.replyTo = arrayOf(InternetAddress(s.replyTo.ifBlank { s.fromEmail }))
         mm.sentDate = Date()
+        if (msg.idempotencyKey.isNotBlank()) {
+            mm.setHeader("Message-ID", "<${msg.idempotencyKey}@salisec.ir>")
+        }
 
         if (msg.attachments.isEmpty()) {
             mm.setText(msg.textBody, "UTF-8")
@@ -100,7 +146,14 @@ class SmtpSender : MailSender {
             }
             mm.setContent(mp)
         }
-        Transport.send(mm)
+        try {
+            Transport.send(mm)
+        } catch (e: Exception) {
+            if (looksAmbiguous(e.message)) {
+                throw AmbiguousSendException(PrivacyRedactor.redact(e.message))
+            }
+            throw RuntimeException(PrivacyRedactor.safeError(e))
+        }
     }
 }
 

@@ -14,6 +14,7 @@ import ir.salisec.autosender.ai.QualityReport
 import ir.salisec.autosender.data.MessageEntity
 import ir.salisec.autosender.data.ReportBundle
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 private data class FollowDraft(
     val original: MessageEntity,
@@ -190,8 +191,11 @@ fun PipelineScreen(app: App, onBack: () -> Unit) {
                                     body = d.result.body,
                                     pdfPaths = d.original.pdfPaths,
                                     attachmentNames = d.original.attachmentNames,
+                                    attachmentPages = d.original.attachmentPages,
                                     evidenceHash = d.original.evidenceHash,
                                     qualityOk = true,
+                                    messageUuid = UUID.randomUUID().toString(),
+                                    campaignId = "active",
                                     status = "APPROVED",
                                     isFollowUp = true
                                 )

@@ -4,8 +4,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import ir.salisec.autosender.App
+import ir.salisec.autosender.R
 import ir.salisec.autosender.data.Prefs
 
 @Composable
@@ -77,16 +79,13 @@ fun SettingsScreen(app: App, onBack: () -> Unit) {
             SubTitle("فاصله و سقف روزانه برای سلامت اعتبار فرستنده است، نه دور زدن فیلتر اسپم.")
         }
 
-        Section("سیاست پیوست (فقط نسخه trial دوصفحه‌ای)") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = s.enforceTrialAttachments,
-                    onClick = { s = s.copy(enforceTrialAttachments = !s.enforceTrialAttachments) },
-                    label = { Text("اجبار ۲ پیوست trial") })
-            }
-            LabeledField("سقف حجم کل پیوست (مگابایت)", s.maxAttachmentMb.toString(),
-                onChange = { s = s.copy(maxAttachmentMb = (it.toIntOrNull() ?: 8).coerceIn(1, 20)) })
-            SubTitle("AI همه PDFهای پوشه را میخواند؛ ارسال فقط trial فارسی + trial انگلیسی است. نام فایلها باید شامل trial و _fa برای نسخه فارسی باشد.")
-            SubTitle("سرویس ارسال هم قبل از هر network call دوباره همین قانون را چک میکند.")
+        Section(stringResource(R.string.policy_title)) {
+            // The exact-two-trial rule is a red line, NOT a user preference.
+            // It is enforced unconditionally in AttachmentGuard + SendEngine.
+            Chip(stringResource(R.string.policy_mandatory), GreenOk)
+            LabeledField(stringResource(R.string.policy_cap), s.maxAttachmentMb.toString(),
+                onChange = { s = s.copy(maxAttachmentMb = (it.toIntOrNull() ?: 4).coerceIn(1, 4)) })
+            SubTitle(stringResource(R.string.policy_note))
         }
 
         Section("اکانت ایمیل - IMAP (صندوق ورودی)") {

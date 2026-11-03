@@ -13,9 +13,23 @@ updates:
         patterns:
           - "org.jetbrains.kotlin*"
           - "com.android.tools.build*"
+          - "com.android.application"
       androidx:
         patterns:
           - "androidx.*"
+    # A toolchain major is a coordinated migration (AGP -> Gradle -> Kotlin ->
+    # compileSdk -> Compose BOM), not a single-line dependency bump. Merging
+    # those PRs one by one is exactly what broke `main` (see CHANGELOG 2.1.0).
+    # They must be proposed and validated together in a dedicated PR.
+    ignore:
+      - dependency-name: "com.android.application"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "org.jetbrains.kotlin.android"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "org.jetbrains.kotlin.plugin.compose"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "org.jetbrains.kotlin.kapt"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
