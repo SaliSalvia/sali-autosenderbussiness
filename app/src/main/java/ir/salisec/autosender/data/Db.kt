@@ -28,6 +28,9 @@ data class MessageEntity(
     val attachmentNames: String = "",
     /** Page count of each trial PDF ("2||2"); verified again before sending. */
     val attachmentPages: String? = null,
+
+    /** Full SHA-256 of each approved PDF, joined by "||". */
+    val attachmentSha256: String? = null,
     /** Hash of the evidence pack the copy was grounded on. */
     val evidenceHash: String = "",
     /** Result of the local grounding / compliance gate. */
@@ -92,13 +95,7 @@ interface MessageDao {
     )
     suspend fun claim(id: Long, owner: String, until: Long, now: Long): Int
 
-    /** A crashed/restarted app must not leave a message stuck in SENDING forever. */
-    @Query(
-        "UPDATE messages SET status = 'QUEUED', leaseOwner = NULL, leaseUntil = NULL, " +
-            "lastError = :reason WHERE status = 'SENDING' " +
-            "AND (leaseUntil IS NULL OR leaseUntil < :now)"
-    )
-    suspend fun requeueStuck(now: Long, reason: String)
+    /**,     * A lease expiry does not prove that the provider rejected the email.,     * Preserve at-most-once behavior by requiring human review.,     */,    @Query(,        "UPDATE messages SET status = 'UNCERTAIN', leaseOwner = NULL, leaseUntil = NULL, " +,            "lastError = :reason, updatedAt = :now " +,            "WHERE status = 'SENDING' AND (leaseUntil IS NULL OR leaseUntil < :now)",    ),    suspend fun markStuckUncertain(now: Long, reason: String)
 
     /** Editing an approved email invalidates its approval: it must be reviewed again. */
     @Query(
@@ -145,7 +142,7 @@ interface CampaignDao {
 
 @Database(
     entities = [MessageEntity::class, LogEntity::class, CampaignEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -172,5 +169,12 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
                 "`id` TEXT NOT NULL, `payload` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, " +
                 "PRIMARY KEY(`id`))"
         )
+    }
+}
+
+/** Adds the approval-time attachment hashes. Existing messages have no hash and must be re-approved. */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE messages ADD COLUMN attachmentSha256 TEXT")
     }
 }

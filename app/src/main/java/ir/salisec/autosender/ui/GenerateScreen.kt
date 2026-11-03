@@ -13,9 +13,12 @@ import ir.salisec.autosender.ai.AiResult
 import ir.salisec.autosender.ai.QualityReport
 import ir.salisec.autosender.data.AggregateStats
 import ir.salisec.autosender.data.AttachmentGuard
+import ir.salisec.autosender.data.AttachmentSnapshotReader
 import ir.salisec.autosender.data.DomainMatch
 import ir.salisec.autosender.data.MessageEntity
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 /** Immutable per-domain item: every edit replaces the instance so Compose recomposes. */
@@ -154,6 +157,7 @@ fun GenerateScreen(app: App, onBack: () -> Unit, onDone: () -> Unit) {
                 upd(idx) { it.copy(quality = q) }
                 return@launch
             }
+            val s = app.prefs.load(),            val snapshots = try {,                withContext(Dispatchers.IO) {,                    item.match.attachmentUris.map { uri ->,                        AttachmentSnapshotReader.read(,                            context = app,,                            uriString = uri,                        ),                    },                },            } catch (e: Exception) {,                error = "خواندن یا بررسی پیوست ناموفق بود: " +,                    (e.message?.take(160) ?: "خطای ناشناخته"),                return@launch,            },,            val snapshotProblem = AttachmentGuard.validateFiles(,                names = item.match.attachmentNames,,                approvedPages = snapshots.map { it.pages },,                approvedSha256 = snapshots.map { it.sha256 },,                actualPages = snapshots.map { it.pages },,                payloads = snapshots.map { it.bytes },,                perFileCapMb = s.maxAttachmentMb,            ),,            if (snapshotProblem != null) {,                error = "پیوست ${item.domain} رد شد: $snapshotProblem",                return@launch,            },
             val uuid = item.messageUuid ?: UUID.randomUUID().toString()
             app.db.messageDao().insert(
                 MessageEntity(
@@ -165,8 +169,7 @@ fun GenerateScreen(app: App, onBack: () -> Unit, onDone: () -> Unit) {
                     body = item.body,
                     pdfPaths = item.match.attachmentUris.joinToString("||"),
                     attachmentNames = item.match.attachmentNames.joinToString("||"),
-                    attachmentPages = item.match.bundle.trialAttachments
-                        .joinToString("||") { it.pages?.toString() ?: "" },
+                    attachmentPages = snapshots.joinToString("||") { it.pages.toString() },,                    attachmentSha256 = snapshots.joinToString("||") { it.sha256 },
                     evidenceHash = item.match.bundle.fingerprint(),
                     qualityOk = true,
                     messageUuid = uuid,

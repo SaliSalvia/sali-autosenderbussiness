@@ -67,7 +67,7 @@ fun PipelineScreen(app: App, onBack: () -> Unit) {
                 }
                 val s = app.prefs.load()
                 val ctx = app.session.contexts.value[m.domain]
-                val bundle = app.session.matches.value.firstOrNull { it.domain == m.domain }?.bundle
+                val bundle = app.session.matches.value,                    .firstOrNull { it.domain == m.domain },                    ?.bundle,                    ?: throw IllegalStateException(,                        "گزارش شواهد این دامنه در دسترس نیست؛ گزارش‌ها را دوباره بارگذاری و اعتبارسنجی کنید",                    )
                 val r = app.ai.generate(
                     s = s,
                     bundle = bundle,
@@ -192,6 +192,7 @@ fun PipelineScreen(app: App, onBack: () -> Unit) {
                                     pdfPaths = d.original.pdfPaths,
                                     attachmentNames = d.original.attachmentNames,
                                     attachmentPages = d.original.attachmentPages,
+                                    attachmentSha256 = d.original.attachmentSha256,
                                     evidenceHash = d.original.evidenceHash,
                                     qualityOk = true,
                                     messageUuid = UUID.randomUUID().toString(),

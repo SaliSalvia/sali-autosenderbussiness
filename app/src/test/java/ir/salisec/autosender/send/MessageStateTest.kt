@@ -24,7 +24,8 @@ class MessageStateTest {
         assertTrue(MessageState.canTransition(MessageState.APPROVED, MessageState.QUEUED))
         assertTrue(MessageState.canTransition(MessageState.QUEUED, MessageState.SENDING))
         assertTrue(MessageState.canTransition(MessageState.SENDING, MessageState.SENT))
-        assertTrue(MessageState.canTransition(MessageState.SENDING, MessageState.QUEUED))
+        assertTrue(MessageState.canTransition(MessageState.SENDING, MessageState.UNCERTAIN))
+        assertFalse(MessageState.canTransition(MessageState.SENDING, MessageState.QUEUED))
     }
 
     @Test
