@@ -67,7 +67,12 @@ fun PipelineScreen(app: App, onBack: () -> Unit) {
                 }
                 val s = app.prefs.load()
                 val ctx = app.session.contexts.value[m.domain]
-                val bundle = app.session.matches.value,                    .firstOrNull { it.domain == m.domain },                    ?.bundle,                    ?: throw IllegalStateException(,                        "گزارش شواهد این دامنه در دسترس نیست؛ گزارش‌ها را دوباره بارگذاری و اعتبارسنجی کنید",                    )
+                val bundle = app.session.matches.value
+                    .firstOrNull { it.domain == m.domain }
+                    ?.bundle
+                    ?: throw IllegalStateException(
+                        "گزارش شواهد این دامنه در دسترس نیست؛ گزارش‌ها را دوباره بارگذاری و اعتبارسنجی کنید"
+                    )
                 val r = app.ai.generate(
                     s = s,
                     bundle = bundle,

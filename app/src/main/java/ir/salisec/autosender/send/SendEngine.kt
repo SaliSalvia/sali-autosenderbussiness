@@ -79,7 +79,10 @@ class SendEngine(
         cancelRequested = false
         job = scope.launch {
             val now0 = System.currentTimeMillis()
-            db.messageDao().markStuckUncertain(,                now0,,                "اجرای قبلی ناتمام ماند؛ نتیجهٔ ارسال نامشخص است و بررسی انسانی لازم است",            )
+            db.messageDao().markStuckUncertain(
+                now0,
+                "اجرای قبلی ناتمام ماند؛ نتیجهٔ ارسال نامشخص است و بررسی انسانی لازم است"
+            )
             var sentToday = db.messageDao().sentSince(startOfDay())
             var sent = 0
             var failed = 0
@@ -92,13 +95,27 @@ class SendEngine(
 
             while (isActive && !cancelRequested) {
                 val now = System.currentTimeMillis()
-                // Also pick up leases that expired while this worker was waiting.,                // The provider outcome of an expired in-flight send is UNKNOWN:,                // it must never go back to the queue automatically.,                db.messageDao().markStuckUncertain(,                    now,,                    "مهلت ارسال پایان یافت؛ نتیجهٔ ارائه‌دهنده نامشخص است و بررسی انسانی لازم است",                )
+                // Also pick up leases that expired while this worker was waiting.
+                // The provider outcome of an expired in-flight send is UNKNOWN:
+                // it must never go back to the queue automatically.
+                db.messageDao().markStuckUncertain(
+                    now,
+                    "مهلت ارسال پایان یافت؛ نتیجهٔ ارائه‌دهنده نامشخص است و بررسی انسانی لازم است"
+                )
                 val candidate = db.messageDao().nextSendable(now) ?: break
                 if (_state.value.paused) {
                     waitWhilePaused()
                     if (cancelRequested) break
                 }
-                // Daily cap BEFORE claiming: once a row is claimed it is SENDING,,                // and a SENDING row must never return to QUEUED automatically.,                val settings = prefs.load(),                if (sentToday >= settings.dailyCap) {,                    // candidate is still APPROVED/QUEUED: leave it untouched for,                    // tomorrow's run and just stop the queue.,                    log(candidate, false, "سقف روزانه رسیده است؛ صف متوقف شد"),                    break,                },
+                // Daily cap BEFORE claiming: once a row is claimed it is SENDING,
+                // and a SENDING row must never return to QUEUED automatically.
+                val settings = prefs.load()
+                if (sentToday >= settings.dailyCap) {
+                    // candidate is still APPROVED/QUEUED: leave it untouched for
+                    // tomorrow's run and just stop the queue.
+                    log(candidate, false, "سقف روزانه رسیده است؛ صف متوقف شد")
+                    break
+                }
                 // Atomic claim: only one worker can own this message.
                 if (db.messageDao().claim(candidate.id, OWNER, now + LEASE_MS, now) == 0) continue
                 val msg = db.messageDao().byId(candidate.id) ?: continue
@@ -159,7 +176,30 @@ class SendEngine(
                         break
                     }
                 }
-                val approvedPages = msg.pageCounts(),                val approvedHashes = msg.attachmentSha256,                    ?.split("||"),                    ?.map { it.trim() },                    .orEmpty(),,                val actualSnapshots = try {,                    attachments.map { (_, bytes) ->,                        AttachmentSnapshotReader.inspect(bytes),                    },                } catch (e: Exception) {,                    readProblem = "اعتبارسنجی PDF ناموفق بود: " +,                        PrivacyRedactor.redact(e.message).take(100),                    emptyList(),                },,                val fileProblem = readProblem ?: AttachmentGuard.validateFiles(,                    names = names,,                    approvedPages = approvedPages,,                    approvedSha256 = approvedHashes,,                    actualPages = actualSnapshots.map { it.pages },,                    payloads = attachments.map { it.second },,                    perFileCapMb = settings.maxAttachmentMb,                )
+                val approvedPages = msg.pageCounts()
+                val approvedHashes = msg.attachmentSha256
+                    ?.split("||")
+                    ?.map { it.trim() }
+                    .orEmpty()
+
+                val actualSnapshots = try {
+                    attachments.map { (_, bytes) ->
+                        AttachmentSnapshotReader.inspect(bytes)
+                    }
+                } catch (e: Exception) {
+                    readProblem = "اعتبارسنجی PDF ناموفق بود: " +
+                        PrivacyRedactor.redact(e.message).take(100)
+                    emptyList()
+                }
+
+                val fileProblem = readProblem ?: AttachmentGuard.validateFiles(
+                    names = names,
+                    approvedPages = approvedPages,
+                    approvedSha256 = approvedHashes,
+                    actualPages = actualSnapshots.map { it.pages },
+                    payloads = attachments.map { it.second },
+                    perFileCapMb = settings.maxAttachmentMb
+                )
                 if (fileProblem != null) {
                     // Attachment problems are deterministic: do not retry, but do
                     // not burn the message either - keep it for human repair.

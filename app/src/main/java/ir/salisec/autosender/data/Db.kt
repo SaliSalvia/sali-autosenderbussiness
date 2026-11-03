@@ -95,7 +95,16 @@ interface MessageDao {
     )
     suspend fun claim(id: Long, owner: String, until: Long, now: Long): Int
 
-    /**,     * A lease expiry does not prove that the provider rejected the email.,     * Preserve at-most-once behavior by requiring human review.,     */,    @Query(,        "UPDATE messages SET status = 'UNCERTAIN', leaseOwner = NULL, leaseUntil = NULL, " +,            "lastError = :reason, updatedAt = :now " +,            "WHERE status = 'SENDING' AND (leaseUntil IS NULL OR leaseUntil < :now)",    ),    suspend fun markStuckUncertain(now: Long, reason: String)
+    /**
+     * A lease expiry does not prove that the provider rejected the email.
+     * Preserve at-most-once behavior by requiring human review.
+     */
+    @Query(
+        "UPDATE messages SET status = 'UNCERTAIN', leaseOwner = NULL, leaseUntil = NULL, " +
+            "lastError = :reason, updatedAt = :now " +
+            "WHERE status = 'SENDING' AND (leaseUntil IS NULL OR leaseUntil < :now)"
+    )
+    suspend fun markStuckUncertain(now: Long, reason: String)
 
     /** Editing an approved email invalidates its approval: it must be reviewed again. */
     @Query(

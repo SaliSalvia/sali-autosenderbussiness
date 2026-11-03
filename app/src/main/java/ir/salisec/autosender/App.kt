@@ -71,7 +71,11 @@ class App : Application() {
         super.onCreate()
         PDFBoxResourceLoader.init(applicationContext)
         db = Room.databaseBuilder(this, AppDatabase::class.java, "sali.db")
-            // Real forward migrations only. Pre-v2 schemas were never shipped,            // in a released APK, so destructive fallback is removed: a missing,            // migration must CRASH, never silently wipe user data.,            .addMigrations(MIGRATION_2_3, MIGRATION_3_4),            .build()
+            // Real forward migrations only. Pre-v2 schemas were never shipped
+            // in a released APK, so destructive fallback is removed: a missing
+            // migration must CRASH, never silently wipe user data.
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+            .build()
         prefs = Prefs(this)
         ai = AiClient(ok)
         enricher = Enricher(ok)
