@@ -19,6 +19,8 @@
 - نامگذاری پیشنهادی: `..._trial_fa.pdf` و `..._trial.pdf`؛ گزارش کامل `..._full.pdf` هرگز پیوست نمیشود.
 
 ## ساخت APK
+✅ **آخرین بیلد سبز است**: [ران ۴۱۵۵۲۹۷۹۷۷۴](https://github.com/SaliSalvia/sali-autosenderbussiness/actions/runs/41552979774) — دو APK نصبپذیر ۲۷ مگابایتی در artifact `SaliBussiness-APK`.
+
 `GitHub → Actions → Build SaliBussiness APK` (روی `main` و شاخههای `arena/**` به صورت خودکار هم اجرا میشود).
 خروجی: `SaliBussiness.apk` (قابل نصب) + `SaliBussiness-debug.apk`.
 بدون نیاز به سیکرت؛ در صورت تنظیم `SALI_KEYSTORE_*` نسخه ریلیس امضا شده ساخته میشود.

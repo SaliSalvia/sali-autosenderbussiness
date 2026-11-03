@@ -209,9 +209,9 @@ finalize(): امضا + خط opt-out به صورت قطعی اضافه میشود
 | #۲ | ❌ | ایمپورت `dp` جاافتاده در `SettingsScreen` | ایمپورت اصلاح شد + بازبینی ۲۵ فایل |
 | #۳ | ❌ | مختصات `pdfbox-android` اشتباه (`com.tom_roush`) | گروه صحیح `com.tom-roush` (خط تیره) |
 | #۴ | ❌ | **لاگ کامل از Actions خوانده شد**: ~۷۰ خطای `e:` — (الف) `LabeledField(label,value,onChange,multiline,singleLine)` با trailing lambda: کامپایلر lambda را به **آخرین پارامتر `Boolean`** نسبت داد → «No value passed for onChange / Function0 vs Boolean / Unresolved it» در `SettingsScreen`, `CampaignScreens`, `InboxScreen`؛ (ب) `ContactsParser.kt:4` escape نامعتبر `\.` (در Kotlin باید `\\.` یا `[.]` باشد)؛ (ج) `continue` داخل lambda ی `ifEmpty {}` (قابلیت آزمایشی) | `onChange` به **آخرین پارامتر** منتقل شد + تمام فراخوانیها به `onChange = ...` نامدار تبدیل شدند؛ regex ایمیل به `[.]`؛ `parse()` با حلقه معمولی و `continue` مجاز بازنویسی شد |
-| #۵ | ⏳ | این بهروزرسانی (v2.0) | نتیجه در «وضعیت بیلد» پایین همین سند ثبت میشود |
+| #۵ | ✅ | **نخستین بیلد سبز پروژه** (commit `bc65176`, ران ۴۱۵۵۲۹۷۹۷۷۴) | تمام موارد بالا اعمال شد؛ `assembleDebug` و `assembleRelease` موفق، APK نصبپذیر آپلود شد |
 
-**وضعیت بیلد:** در انتظار نتیجه CI پس از push این شاخه. (پس از سبز شدن، این خط و ردیف #۵ به «✅ موفق» بهروزرسانی میشود.)
+**وضعیت بیلد:** ✅ **سبز** — [ران ۴۱۵۵۲۹۷۹۷۷۴](https://github.com/SaliSalvia/sali-autosenderbussiness/actions/runs/41552979774) در ۲۰۲۶-۱۱-۰۳: `Build debug APK` و `Build signed release APK` هر دو موفق؛ artifact `SaliBussiness-APK` شامل `SaliBussiness.apk` و `SaliBussiness-debug.apk` (هر کدام ۲۷ مگابایت، debugsigned چون سیکرت امضا تنظیم نشده) آپلود شد. هیچ خطای `e:` باقی نماند. Release با تگ `latest` فقط هنگام merge به `main` منتشر میشود.
 
 ---
 
