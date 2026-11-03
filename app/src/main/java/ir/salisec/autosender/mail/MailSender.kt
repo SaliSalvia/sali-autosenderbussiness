@@ -12,6 +12,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Date
 import java.util.Properties
+import java.util.concurrent.TimeUnit
 import javax.mail.Authenticator
 import javax.mail.Message
 import javax.mail.PasswordAuthentication
@@ -26,20 +27,25 @@ interface MailSender {
     suspend fun send(s: Settings, msg: OutgoingMessage)
 }
 
-/** Brevo transactional HTTPS API - the recommended sender. */
+/** Brevo transactional HTTPS API - the recommended sender.
+ *  No fake headers, no spoofing: sender/replyTo are the user's real identity. */
 class BrevoSender(private val client: OkHttpClient) : MailSender {
     override suspend fun send(s: Settings, msg: OutgoingMessage) = withContext(Dispatchers.IO) {
         val o = JSONObject()
             .put("sender", JSONObject().put("name", s.fromName).put("email", s.fromEmail))
             .put("to", JSONArray().put(JSONObject().put("email", msg.to)))
             .put("subject", msg.subject)
-            .put("htmlContent", msg.htmlBody)
+            .put("htmlContent", html(msg))
             .put("textContent", msg.textBody)
             .put("replyTo", JSONObject().put("email", s.replyTo.ifBlank { s.fromEmail }))
         if (msg.attachments.isNotEmpty()) {
             val arr = JSONArray()
             for ((name, bytes) in msg.attachments) {
-                arr.put(JSONObject().put("name", name).put("content", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)))
+                arr.put(
+                    JSONObject()
+                        .put("name", name)
+                        .put("content", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
+                )
             }
             o.put("attachment", arr)
         }
@@ -49,15 +55,15 @@ class BrevoSender(private val client: OkHttpClient) : MailSender {
             .header("Content-Type", "application/json")
             .post(o.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        client.newCall(req).execute().use { resp ->
+        client.newBuilder().callTimeout(90, TimeUnit.SECONDS).build().newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
-                throw RuntimeException("Brevo " + resp.code + ": " + resp.body?.string()?.take(300))
+                throw RuntimeException("Brevo " + resp.code + ": " + (resp.body?.string()?.take(300) ?: ""))
             }
         }
     }
 }
 
-/** Plain SMTP sender (custom domain). */
+/** Plain SMTP sender (custom domain, STARTTLS). */
 class SmtpSender : MailSender {
     override suspend fun send(s: Settings, msg: OutgoingMessage) = withContext(Dispatchers.IO) {
         val props = Properties().apply {
@@ -97,3 +103,20 @@ class SmtpSender : MailSender {
         Transport.send(mm)
     }
 }
+
+/** Hidden preheader + properly escaped RTL-friendly HTML. */
+private fun html(msg: OutgoingMessage): String {
+    val pre = if (msg.preheader.isBlank()) "" else
+        "<div style='display:none;max-height:0;overflow:hidden;opacity:0;font-size:1px'>" +
+            escapeHtml(msg.preheader) + "</div>"
+    val body = escapeHtml(msg.textBody).replace("\n", "<br>")
+    return "<div dir='rtl' style='font-family:Tahoma,Arial,sans-serif;font-size:14px;line-height:1.9'>" +
+        pre + body + "</div>"
+}
+
+private fun escapeHtml(s: String): String = s
+    .replace("&", "&amp;")
+    .replace("<", "&lt;")
+    .replace(">", "&gt;")
+    .replace("\"", "&quot;")
+    .replace("'", "&#39;")

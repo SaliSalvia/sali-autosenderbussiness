@@ -10,7 +10,15 @@ data class MessageEntity(
     val name: String?,
     val subject: String = "",
     val body: String = "",
+    val preheader: String = "",
+    /** ONLY the two trial PDF URIs, separated by "||". */
     val pdfPaths: String = "",
+    /** Exact file names of those two trial PDFs (used by the send-time guard). */
+    val attachmentNames: String = "",
+    /** Hash of the evidence pack the copy was grounded on. */
+    val evidenceHash: String = "",
+    /** Result of the local grounding / compliance gate. */
+    val qualityOk: Boolean = false,
     val status: String = "DRAFT",
     val attempts: Int = 0,
     val lastError: String? = null,
@@ -45,6 +53,10 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE id = :id")
     suspend fun byId(id: Long): MessageEntity?
 
+    /** A crashed/restarted app must not leave a message stuck in SENDING. */
+    @Query("UPDATE messages SET status = 'QUEUED' WHERE status = 'SENDING'")
+    suspend fun requeueStuck()
+
     @Insert suspend fun insert(m: MessageEntity): Long
     @Update suspend fun update(m: MessageEntity)
     @Delete suspend fun delete(m: MessageEntity)
@@ -61,7 +73,7 @@ interface LogDao {
     @Query("DELETE FROM logs") suspend fun clearAll()
 }
 
-@Database(entities = [MessageEntity::class, LogEntity::class], version = 1, exportSchema = false)
+@Database(entities = [MessageEntity::class, LogEntity::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
     abstract fun logDao(): LogDao

@@ -15,16 +15,21 @@ import ir.salisec.autosender.send.SendEngine
 import kotlinx.coroutines.flow.MutableStateFlow
 import okhttp3.OkHttpClient
 
-/** In-memory campaign session (steps: domains -> contacts -> reports -> generate). */
+/** In-memory campaign session (domains -> contacts -> reports -> generate). */
 class CampaignSession {
     val domains = MutableStateFlow<List<String>>(emptyList())
     val contacts = MutableStateFlow<Map<String, Contact>>(emptyMap())
     val matches = MutableStateFlow<List<DomainMatch>>(emptyList())
     val selected = MutableStateFlow<Set<String>>(emptySet())
+    /** You.com result cache - one public-context lookup per domain, not one per email. */
     val contexts = MutableStateFlow<Map<String, CompanyContext>>(emptyMap())
+
     fun reset() {
-        domains.value = emptyList(); contacts.value = emptyMap()
-        matches.value = emptyList(); selected.value = emptySet(); contexts.value = emptyMap()
+        domains.value = emptyList()
+        contacts.value = emptyMap()
+        matches.value = emptyList()
+        selected.value = emptySet()
+        contexts.value = emptyMap()
     }
 }
 
@@ -41,7 +46,12 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         PDFBoxResourceLoader.init(applicationContext)
-        db = Room.databaseBuilder(this, AppDatabase::class.java, "sali.db").build()
+        // Schema v2 adds attachment/grounding columns. No APK was ever released from v1,
+        // so a fresh schema is safe; this also avoids a broken v1->v2 migration on any
+        // debug install that might exist on the developer's own phone.
+        db = Room.databaseBuilder(this, AppDatabase::class.java, "sali.db")
+            .fallbackToDestructiveMigration()
+            .build()
         prefs = Prefs(this)
         ai = AiClient(ok)
         enricher = Enricher(ok)

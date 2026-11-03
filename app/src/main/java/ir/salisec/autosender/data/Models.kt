@@ -1,6 +1,6 @@
 package ir.salisec.autosender.data
 
-/** Parsed security report data (from JSON sidecar or PDF text). */
+/** Parsed security report data (from JSON sidecar and/or the text of ALL PDFs). */
 data class ReportData(
     val domain: String,
     val scanId: String? = null,
@@ -17,25 +17,26 @@ data class ReportData(
     val subdomains: Int? = null
 )
 
-/** A contact (recipient) for a domain. */
+/** A contact (recipient) for a domain. Only ever the user's own lead list. */
 data class Contact(
     val domain: String,
     val email: String,
-    val name: String? = null
+    val name: String? = null,
+    /** Generic role mailbox (info@, sales@ ...) as opposed to a person's address. */
+    val isRole: Boolean = false
 )
 
-/** Company context enrichment from web search (public business info only). */
+/** Public, company-level context from You.com. Never personal contact data. */
 data class CompanyContext(
     val domain: String,
-    val summary: String
+    val summary: String,
+    val sources: List<String> = emptyList()
 )
 
 enum class PipelineState { SENT, REPLIED, NEGOTIATING, PAID, LOST }
 
-/** Status of a campaign message. */
 enum class MsgStatus { DRAFT, APPROVED, QUEUED, SENDING, SENT, FAILED, SKIPPED }
 
-/** One row of the live send log. */
 data class LogEntry(
     val ts: Long,
     val domain: String,
@@ -44,20 +45,35 @@ data class LogEntry(
     val message: String
 )
 
-/** Outbound message handed to a MailSender. */
+/** Outbound message handed to a MailSender. `attachments` MUST be the 2 trial PDFs. */
 data class OutgoingMessage(
     val to: String,
     val subject: String,
     val htmlBody: String,
     val textBody: String,
+    val preheader: String = "",
     val attachments: List<Pair<String, ByteArray>> = emptyList()
 )
 
-/** Match of a domain to its report folder. */
+/** Match of a domain to its report folder.
+ *  `bundle.pdfs` = every PDF (AI reads them all).
+ *  `bundle.trialAttachments` = the only files allowed to be sent. */
 data class DomainMatch(
     val domain: String,
     val folderName: String?,
-    val pdfFiles: List<String>,
+    val bundle: ReportBundle,
     val report: ReportData?,
     val hasEmail: Boolean
-)
+) {
+    /** All PDF URIs in the folder - read by the AI, never attached wholesale. */
+    val pdfFiles: List<String> get() = bundle.pdfs.map { it.uri }
+    val attachmentUris: List<String> get() = bundle.trialAttachments.map { it.uri }
+    val attachmentNames: List<String> get() = bundle.trialAttachments.map { it.name }
+    val warnings: List<String> get() = bundle.warnings
+    val pdfCount: Int get() = bundle.pdfs.size
+    val readyForApproval: Boolean
+        get() = report != null && hasEmail && attachmentUris.size == 2 && bundle.pdfs.isNotEmpty()
+}
+
+/** Real, aggregate benchmark computed from the user's own scanned reports. */
+data class AggregateStats(val count: Int, val average: Int)

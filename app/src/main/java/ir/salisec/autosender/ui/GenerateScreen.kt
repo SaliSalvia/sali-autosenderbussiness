@@ -9,11 +9,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ir.salisec.autosender.App
+import ir.salisec.autosender.ai.AiResult
+import ir.salisec.autosender.ai.QualityReport
+import ir.salisec.autosender.data.AggregateStats
 import ir.salisec.autosender.data.DomainMatch
 import ir.salisec.autosender.data.MessageEntity
 import kotlinx.coroutines.launch
 
-/** Immutable per-domain generation item; list updates replace instances so Compose recomposes. */
+/** Immutable per-domain item: every edit replaces the instance so Compose recomposes. */
 data class GenItem(
     val domain: String,
     val email: String,
@@ -21,9 +24,18 @@ data class GenItem(
     val match: DomainMatch,
     val style: String = "TECHNICAL",
     val subject: String = "",
+    val preheader: String = "",
     val body: String = "",
-    val generated: Boolean = false
-)
+    val subjectAlternatives: List<String> = emptyList(),
+    val quality: QualityReport = QualityReport(),
+    val generated: Boolean = false,
+    val approved: Boolean = false
+) {
+    fun toResult(): AiResult = AiResult(
+        subject = subject, preheader = preheader, body = body,
+        subjectAlternatives = subjectAlternatives, quality = quality
+    )
+}
 
 @Composable
 fun GenerateScreen(app: App, onBack: () -> Unit, onDone: () -> Unit) {
@@ -38,85 +50,157 @@ fun GenerateScreen(app: App, onBack: () -> Unit, onDone: () -> Unit) {
             addAll(app.session.selected.value.mapNotNull { d ->
                 val m = app.session.matches.value.firstOrNull { it.domain == d } ?: return@mapNotNull null
                 val c = app.session.contacts.value[d]
-                GenItem(domain = d, email = c?.email ?: "", name = c?.name, match = m)
+                GenItem(domain = d, email = c?.email.orEmpty(), name = c?.name, match = m)
             })
         }
     }
 
     val scores = app.session.matches.value.mapNotNull { it.report?.score }
-    val aggAvg = if (scores.isNotEmpty()) scores.average().toInt() else null
-    val aggCount = scores.size
+    val aggregate = if (scores.isEmpty()) null else AggregateStats(scores.size, scores.average().toInt())
 
-    fun upd(idx: Int, f: (GenItem) -> GenItem) { items[idx] = f(items[idx]) }
+    fun qualityFor(item: GenItem): QualityReport = app.ai.check(
+        result = item.toResult(),
+        s = app.prefs.load(),
+        bundle = item.match.bundle,
+        aggregate = aggregate,
+        contactName = item.name,
+        isFollowUp = false,
+        domain = item.domain,
+        email = item.email
+    )
+
+    fun upd(idx: Int, f: (GenItem) -> GenItem) {
+        val next = f(items[idx])
+        items[idx] = if (next.generated) next.copy(quality = qualityFor(next)) else next
+    }
 
     fun generateOne(idx: Int, onDoneGen: (Boolean) -> Unit) {
         scope.launch {
             busy = true
+            error = null
             try {
                 val s = app.prefs.load()
                 val item = items[idx]
-                val rep = item.match.report ?: throw IllegalStateException("گزارشی برای " + item.domain + " خوانده نشد")
-                var ctx = app.session.contexts.value[item.domain]
-                if (ctx == null) {
-                    ctx = app.enricher.enrich(s, item.domain)
-                    app.session.contexts.value = app.session.contexts.value + (item.domain to ctx)
+                if (!item.match.readyForApproval) {
+                    throw IllegalStateException("برای ${item.domain} دو نسخه trial یا داده گزارش ناقص است")
                 }
-                val r = app.ai.generate(s, rep, item.name, ctx, aggAvg, aggCount, item.style, false, null)
-                upd(idx) { it.copy(subject = r.subject, body = r.body, generated = true) }
+                val ctx = app.session.contexts.value[item.domain] ?: run {
+                    val fresh = app.enricher.enrich(s, item.domain)
+                    app.session.contexts.value = app.session.contexts.value + (item.domain to fresh)
+                    fresh
+                }
+                val r = app.ai.generate(
+                    s = s,
+                    bundle = item.match.bundle,
+                    contactName = item.name,
+                    context = ctx,
+                    aggregate = aggregate,
+                    style = item.style,
+                    isFollowUp = false,
+                    domain = item.domain,
+                    email = item.email
+                )
+                upd(idx) {
+                    it.copy(
+                        subject = r.subject, preheader = r.preheader, body = r.body,
+                        subjectAlternatives = r.subjectAlternatives, quality = r.quality,
+                        generated = true, approved = false
+                    )
+                }
                 onDoneGen(true)
             } catch (e: Exception) {
-                error = e.message?.take(200) ?: "خطا در تولید"
+                error = e.message?.take(240) ?: "خطا در تولید متن"
                 onDoneGen(false)
             }
             busy = false
         }
     }
 
-    fun approve(item: GenItem) {
+    fun approve(idx: Int) {
         scope.launch {
-            app.db.messageDao().insert(MessageEntity(
-                domain = item.domain, email = item.email, name = item.name,
-                subject = item.subject, body = item.body,
-                pdfPaths = item.match.pdfFiles.joinToString("||"),
-                status = "APPROVED"
-            ))
+            val item = items[idx]
+            if (item.approved) return@launch
+            if (item.match.attachmentUris.size != 2) {
+                error = "فقط دو نسخه trial دوصفحه‌ای باید پیوست شود؛ ${item.domain} ناقص است"
+                return@launch
+            }
+            val q = qualityFor(item)
+            if (!q.passed) {
+                error = "متن ${item.domain} از گیت صحت عبور نکرد: " + q.blockers.joinToString(" | ")
+                upd(idx) { it.copy(quality = q) }
+                return@launch
+            }
+            app.db.messageDao().insert(
+                MessageEntity(
+                    domain = item.domain,
+                    email = item.email,
+                    name = item.name,
+                    subject = item.subject,
+                    preheader = item.preheader,
+                    body = item.body,
+                    pdfPaths = item.match.attachmentUris.joinToString("||"),
+                    attachmentNames = item.match.attachmentNames.joinToString("||"),
+                    evidenceHash = item.match.bundle.fingerprint(),
+                    qualityOk = true,
+                    status = "APPROVED"
+                )
+            )
+            upd(idx) { it.copy(approved = true, quality = q) }
             approvedCount++
         }
     }
 
     ScreenScaffold {
-        Title("۴. تولید متن و بازبینی")
-        SubTitle("متن هر ایمیل را می‌بینی، ویرایش می‌کنی و تأیید می‌کنی — هیچ چیزی بدون تأیید تو ارسال نمی‌شود")
-        if (aggAvg != null) SubTitle("میانگین امتیاز " + aggCount.toString() + " سایت اسکن‌شده: " + aggAvg.toString() + "/100")
-        if (error != null) Chip("خطا: " + error.toString(), RedErr)
+        Title("۴. تولید متن و بازبینی انسانی")
+        SubTitle("AI تمام PDFهای پوشه را میخواند، ولی فقط ۲ نسخه trial را پیوست میکند. هر ایمیل را ببین، ویرایش کن، سپس تأیید کن — بدون تأیید هیچ ارسالی انجام نمیشود.")
+        if (aggregate != null) {
+            SubTitle("شاخص واقعی مقایسه: میانگین امتیاز ${aggregate.average}/100 از ${aggregate.count} دامنه اسکن شده خودت")
+        }
+        error?.let { Chip("خطا: $it", RedErr) }
         if (busy) LoadingBox(if (progress.isBlank()) "در حال تولید..." else progress)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                if (!busy) {
-                    var idx = -1
-                    fun next() {
-                        idx++
-                        if (idx >= items.size) { progress = ""; return }
-                        progress = "تولید متن برای " + items[idx].domain
-                        generateOne(idx) { next() }
+            Button(
+                onClick = {
+                    if (!busy) {
+                        var idx = -1
+                        fun next() {
+                            idx++
+                            if (idx >= items.size) {
+                                progress = ""
+                                return
+                            }
+                            progress = "تولید متن برای " + items[idx].domain
+                            generateOne(idx) { next() }
+                        }
+                        next()
                     }
-                    next()
-                }
-            }, enabled = !busy) { Text("تولید همه با AI") }
+                },
+                enabled = !busy
+            ) { Text("تولید همه با AI (پیش نویس + ویراستار)") }
         }
-        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 470.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyColumn(
+            Modifier.fillMaxWidth().heightIn(max = 470.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             itemsIndexed(items) { idx, item ->
                 GenItemCard(
                     item = item,
                     onStyle = { st -> upd(idx) { it.copy(style = st) } },
                     onSubject = { t -> upd(idx) { it.copy(subject = t) } },
+                    onPreheader = { t -> upd(idx) { it.copy(preheader = t) } },
                     onBody = { t -> upd(idx) { it.copy(body = t) } },
-                    onGenerate = { if (!busy) { progress = "تولید متن برای " + item.domain; generateOne(idx) { } } },
-                    onApprove = { approve(item) }
+                    onPickSubject = { t -> upd(idx) { it.copy(subject = t) } },
+                    onGenerate = {
+                        if (!busy) {
+                            progress = "تولید متن برای " + item.domain
+                            generateOne(idx) { }
+                        }
+                    },
+                    onApprove = { approve(idx) }
                 )
             }
         }
-        Text("تأییدشده در صف: " + approvedCount.toString())
+        Text("تأیید شده در صف: $approvedCount")
         BigButton("پایان ← صفحه ارسال", enabled = approvedCount > 0) { onDone() }
         TextButton(onClick = onBack) { Text("بازگشت") }
     }
@@ -127,23 +211,61 @@ private fun GenItemCard(
     item: GenItem,
     onStyle: (String) -> Unit,
     onSubject: (String) -> Unit,
+    onPreheader: (String) -> Unit,
     onBody: (String) -> Unit,
+    onPickSubject: (String) -> Unit,
     onGenerate: () -> Unit,
     onApprove: () -> Unit
 ) {
     Section(item.domain + " → " + item.email) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            FilterChip(selected = item.style == "TECHNICAL", onClick = { onStyle("TECHNICAL") }, label = { Text("فنی") })
-            FilterChip(selected = item.style == "BUSINESS", onClick = { onStyle("BUSINESS") }, label = { Text("کسب‌وکاری") })
+            FilterChip(selected = item.style == "TECHNICAL", onClick = { onStyle("TECHNICAL") }, label = { Text("فنی / CTO") })
+            FilterChip(selected = item.style == "BUSINESS", onClick = { onStyle("BUSINESS") }, label = { Text("کسب و کاری") })
             FilterChip(selected = item.style == "DIRECT", onClick = { onStyle("DIRECT") }, label = { Text("مستقیم") })
         }
-        OutlinedButton(onClick = onGenerate, enabled = item.match.report != null) { Text("تولید متن با AI") }
-        LabeledField("موضوع", item.subject, onChange = onSubject)
-        LabeledField("متن ایمیل", item.body, onChange = onBody, multiline = true)
-        item.match.report?.let { r ->
-            SubTitle("داده‌ی واقعی گزارش: امتیاز " + (r.score?.toString() ?: "؟") + " | یافته‌ها: " + (r.findings?.toString() ?: "؟") +
-                (r.freeFindingTitle?.let { " | " + it } ?: "") + " | پیوست PDF: " + item.match.pdfFiles.size.toString() + " فایل")
+        val r = item.match.report
+        SubTitle("شواهد واقعی: ${item.match.pdfCount} فایل PDF خوانده شد | امتیاز " +
+            (r?.score?.toString() ?: "؟") + "/100 | یافته‌ها: " + (r?.findings?.toString() ?: "؟") +
+            (r?.critical?.let { " | بحرانی: $it" } ?: "") +
+            (r?.freeFindingTitle?.let { " | " + it.take(60) } ?: ""))
+        if (item.match.attachmentNames.size == 2) {
+            Chip("پیوست ارسالی: " + item.match.attachmentNames.joinToString(" + "), GreenOk)
+        } else {
+            Chip("خطا: فقط ${item.match.attachmentNames.size} نسخه trial پیدا شد؛ ارسال تا رفع آن ممنوع است", RedErr)
         }
-        Button(onClick = onApprove, enabled = item.subject.isNotBlank() && item.body.isNotBlank()) { Text("تأیید و افزودن به صف") }
+        item.match.warnings.take(2).forEach { SubTitle("⚠ $it") }
+
+        OutlinedButton(onClick = onGenerate, enabled = item.match.readyForApproval) {
+            Text(if (item.generated) "تولید مجدد با AI" else "تولید متن با AI")
+        }
+        LabeledField("موضوع", item.subject, onChange = onSubject)
+        if (item.subjectAlternatives.isNotEmpty()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                item.subjectAlternatives.take(3).forEach { alt ->
+                    FilterChip(selected = false, onClick = { onPickSubject(alt) }, label = {
+                        Text(alt.take(28), fontSize = 11.sp)
+                    })
+                }
+            }
+        }
+        LabeledField("پیش نمایش ایمیل (preheader)", item.preheader, onChange = onPreheader)
+        LabeledField("متن ایمیل", item.body, multiline = true, onChange = onBody)
+
+        if (item.generated) {
+            if (item.quality.passed) Chip("✓ ${item.quality.summary} — اعداد فقط از گزارش واقعی", GreenOk)
+            else Chip("✗ ${item.quality.summary}", RedErr)
+            item.quality.blockers.forEach { SubTitle("⛔ $it") }
+            item.quality.issues.take(3).forEach { SubTitle("• $it") }
+        }
+        if (item.approved) {
+            Chip("تأیید شد و به صف اضافه شد ✓", GreenOk)
+        } else {
+            Button(
+                onClick = onApprove,
+                enabled = item.generated && item.quality.passed &&
+                    item.subject.isNotBlank() && item.body.isNotBlank() &&
+                    item.match.attachmentUris.size == 2
+            ) { Text("تأیید و افزودن به صف") }
+        }
     }
 }
