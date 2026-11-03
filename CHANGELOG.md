@@ -29,7 +29,7 @@
 - «پاکسازی کامل دادههای اپ» در تنظیمات با دیالوگ تأیید: `App.clearAllData()` جداول `messages`/`logs`/`campaigns`، تنظیمات رمزنگاریشده و session را پاک میکند؛ `PRIVACY.md` FA/EN به همان نام دکمه بهروز شد.
 - `isMinifyEnabled=true` + `isShrinkResources=true` با قواعد R8 محافظهکارانه؛ `lint { abortOnError = false }` بهعنوان گزارش.
 - `versionCode = 3`, `versionName = "2.0.0"`, `targetSdk/compileSdk = 36` (الزام Play از ۲۰۲۶-۰۸-۳۱).
-- CI: `clean test lintDebug assembleDebug assembleRelease bundleRelease`، نصب صریح `platforms;android-36`، artifact `SaliBussiness-APK` شامل APK + AAB + `SHA256SUMS.txt`، Release `latest` فقط روی `main`، امضای ریلیس فقط با چهار سیکرت `SALI_KEYSTORE_*`.
+- CI: `clean test lintDebug assembleDebug assembleRelease bundleRelease`، نصب صریح `platforms;android-36`، artifact `SaliBussiness-APK` شامل APK + AAB + `SHA256SUMS.txt`، Release `latest` فقط روی `push` به `main`، امضای ریلیس فقط با چهار سیکرت `SALI_KEYSTORE_*`. گروه concurrency شامل `github.event_name` است تا اجرای `pull_request` بیلد `main` را لغو نکند؛ شرط انتشار صریحاً `github.event_name == 'push'` را میخواهد.
 - `SECURITY.md` بهوضعیت جدید بهروز شد؛ [`PRIVACY.md`](PRIVACY.md) (FA/EN) و [`CONTRIBUTING.md`](CONTRIBUTING.md) اضافه شدند.
 
 ### Known limitations (باقیمانده)

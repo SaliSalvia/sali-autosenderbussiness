@@ -14,7 +14,10 @@ permissions:
   contents: write
 
 concurrency:
-  group: build-sali-${{ github.ref }}
+  # A merged PR's `pull_request` event can report github.ref as the base branch.
+  # Include the event name so a PR run can never cancel the main push run that
+  # publishes Release `latest`.
+  group: build-sali-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -132,7 +135,9 @@ jobs:
           retention-days: 60
 
       - name: Create/update GitHub Release (main only)
-        if: github.ref == 'refs/heads/main'
+        # Explicit push check: a pull_request event must never publish a release
+        # with a contents:write token, even if github.ref reports the base branch.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: latest
@@ -153,7 +158,7 @@ jobs:
           make_latest: true
 
       - name: Create versioned release on v* tags
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
           name: SaliBussiness ${{ github.ref_name }}
