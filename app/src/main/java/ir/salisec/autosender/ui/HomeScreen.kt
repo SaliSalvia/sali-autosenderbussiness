@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Outbox
@@ -69,6 +69,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
     val sendState by app.engine.state.collectAsState()
     val contacts by app.session.contacts.collectAsState()
     val matches by app.session.matches.collectAsState()
+    val deliverability by app.session.deliverability.collectAsState()
     var pendingCount by remember { mutableIntStateOf(0) }
     var sentTotal by remember { mutableIntStateOf(0) }
     var showSendConfirm by remember { mutableStateOf(false) }
@@ -90,8 +91,9 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
     val hasHcns = settings.hcnsKey.isNotBlank()
     val hasYou = settings.youKey.isNotBlank()
     val hasSitest = settings.sitestFolderUri.isNotBlank()
-    val hasSender = settings.fromEmail.isNotBlank() &&
-        (if (settings.sendMode == "BREVO_API") settings.brevoKey.isNotBlank() else settings.smtpHost.isNotBlank())
+    val hasOutgoing = settings.hasOutgoingConfigured()
+    val hasIncoming = settings.hasIncomingConfigured()
+    val templateCount = settings.referenceTemplates().size
 
     ScreenScaffold {
         HeroBanner {
@@ -114,7 +116,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                 }
             }
 
-            // Readiness status pills (click any to configure in Settings)
+            // Readiness status pills (click any to configure)
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -126,6 +128,11 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                 }
                 Chip(modelLabel, if (hasHcns) GreenOk else RedErr, onClick = { go(Screen.Settings) })
                 Chip(
+                    "الگوهای فروش: $templateCount/4",
+                    if (templateCount > 0) GreenOk else OrangeWarn,
+                    onClick = { go(Screen.Settings) }
+                )
+                Chip(
                     if (hasYou) "You.com: آماده" else "You.com: کلید ندارد",
                     if (hasYou) GreenOk else OrangeWarn,
                     onClick = { go(Screen.Settings) }
@@ -136,10 +143,21 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                     onClick = { go(Screen.Settings) }
                 )
                 Chip(
-                    if (hasSender) "ایمیل فرستنده: آماده" else "ایمیل فرستنده: ناقص",
-                    if (hasSender) GreenOk else OrangeWarn,
-                    onClick = { go(Screen.Settings) }
+                    if (hasOutgoing && hasIncoming) "ایمیل (ورودی+خروجی): متصل"
+                    else if (hasOutgoing) "ایمیل: فقط خروجی"
+                    else "ورود به ایمیل (Thunderbird)",
+                    if (hasOutgoing && hasIncoming) GreenOk else OrangeWarn,
+                    onClick = { go(Screen.EmailSetup) }
                 )
+                deliverability?.let { dr ->
+                    Chip(
+                        if (dr.isClean) "ضداسپم DNS: سالم ✓"
+                        else if (dr.hasCriticalFailure) "ضداسپم DNS: ${dr.failCount} مشکل"
+                        else "ضداسپم DNS: ${dr.warnCount} هشدار",
+                        if (dr.isClean) GreenOk else if (dr.hasCriticalFailure) RedErr else OrangeWarn,
+                        onClick = { go(Screen.Send) }
+                    )
+                }
             }
 
             Row(
@@ -155,7 +173,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                 text = if (matches.isNotEmpty() || contacts.isNotEmpty()) {
                     "ادامه کمپین سریع (${contacts.size} مخاطب)"
                 } else {
-                    "شروع کمپین سریع (ایمیل‌ها ← sitest ← AI)"
+                    "شروع کمپین سریع (ورود سطری ← sitest ← AI)"
                 },
                 icon = Icons.Default.AutoAwesome,
                 modifier = Modifier.testTag("home_start_campaign")
@@ -207,15 +225,15 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
         Section(header = stringResource(R.string.home_workspace), icon = Icons.Default.FolderOpen) {
             HomeCard(
                 title = "کمپین سریع و تطبیق خودکار sitest",
-                subtitle = "ورود لیست ایمیل‌ها، انتخاب خودکار ۲ PDF جدیدترین، سرچ You.com و تولید متن",
+                subtitle = "ورود سطری ایمیل‌ها، انتخاب ۲ PDF جدیدترین، سرچ You.com و طراحی با ۴ الگو",
                 icon = Icons.Default.AutoAwesome,
                 accent = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.testTag("home_card_campaign")
             ) { go(Screen.Campaign) }
 
             HomeCard(
-                title = "صف و گزارش زنده ارسال",
-                subtitle = "مشاهده وضعیت، توقف موقت، شمارش معکوس و خروجی گزارش",
+                title = "بررسی ضداسپم (SPF/DKIM/DMARC) و صف ارسال",
+                subtitle = "اعتبارسنجی کامل DNS، چک مجدد رفع خطا و گزارش زنده ارسال",
                 icon = Icons.Default.Outbox,
                 accent = GreenOk,
                 modifier = Modifier.testTag("home_card_send")
@@ -223,15 +241,23 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
 
             HomeCard(
                 title = "خط لوله فروش و صندوق ورودی",
-                subtitle = "پاسخ مشتریان، مدیریت opt-out و تولید ایمیل پیگیری با AI",
+                subtitle = "همگام‌سازی خودکار پاسخ‌ها و Bounce، مدیریت opt-out و پیگیری AI",
                 icon = Icons.Default.Forum,
                 accent = OrangeWarn,
                 modifier = Modifier.testTag("home_card_pipeline")
             ) { go(Screen.PipelineInbox) }
 
             HomeCard(
-                title = "تنظیمات، کلیدهای API و پوشه sitest",
-                subtitle = "تنظیم ۱ باره کلید You.com، hcnsec (سنجش قوی‌ترین مدل)، Brevo و پوشه",
+                title = "ورود و تنظیم حساب ایمیل (سبک Thunderbird)",
+                subtitle = "تشخیص خودکار سرورهای IMAP + SMTP و تست زنده اتصال ورودی و خروجی",
+                icon = Icons.Default.Email,
+                accent = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.testTag("home_card_email_setup")
+            ) { go(Screen.EmailSetup) }
+
+            HomeCard(
+                title = "تنظیمات، ۴ الگوی ایمیل، APIها و پوشه sitest",
+                subtitle = "تنظیم ۱ باره You.com، hcnsec (قوی‌ترین مدل)، ۴ قالب الگو و پوشه sitest",
                 icon = Icons.Default.Settings,
                 accent = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.testTag("home_card_settings")

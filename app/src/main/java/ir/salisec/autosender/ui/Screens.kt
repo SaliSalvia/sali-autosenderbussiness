@@ -6,4 +6,5 @@ sealed class Screen {
     object Send : Screen()
     object PipelineInbox : Screen()
     object Settings : Screen()
+    object EmailSetup : Screen()
 }

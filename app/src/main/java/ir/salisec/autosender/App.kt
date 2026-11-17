@@ -16,7 +16,11 @@ import ir.salisec.autosender.data.Contact
 import ir.salisec.autosender.data.DomainMatch
 import ir.salisec.autosender.data.MIGRATION_2_3
 import ir.salisec.autosender.data.MIGRATION_3_4
+import ir.salisec.autosender.data.MIGRATION_4_5
 import ir.salisec.autosender.data.Prefs
+import ir.salisec.autosender.data.StudioDraftEntity
+import ir.salisec.autosender.mail.DeliverabilityChecker
+import ir.salisec.autosender.mail.DeliverabilityReport
 import ir.salisec.autosender.mail.InboxClient
 import ir.salisec.autosender.send.SendEngine
 import kotlinx.coroutines.CoroutineScope
@@ -28,8 +32,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import org.json.JSONArray
 
-/** Draft/generated email state held in memory while navigating tabs. */
+/** Draft/generated email state held in memory and mirrored to Room `studio_drafts`. */
 data class CampaignDraftItem(
     val key: String,
     val domain: String,
@@ -47,14 +52,16 @@ data class CampaignDraftItem(
     val generating: Boolean = false,
     val statusNote: String = "",
     val error: String? = null,
-    val messageUuid: String? = null
+    val messageUuid: String? = null,
+    val modelUsed: String = ""
 ) {
     fun toResult(): AiResult = AiResult(
         subject = subject,
         preheader = preheader,
         body = body,
         subjectAlternatives = subjectAlternatives,
-        quality = quality
+        quality = quality,
+        modelUsed = modelUsed
     )
 }
 
@@ -67,8 +74,10 @@ class CampaignSession {
     val selected = MutableStateFlow<Set<String>>(emptySet())
     val contexts = MutableStateFlow<Map<String, CompanyContext>>(emptyMap())
     val drafts = MutableStateFlow<List<CampaignDraftItem>>(emptyList())
+    val persistedDrafts = MutableStateFlow<Map<String, StudioDraftEntity>>(emptyMap())
+    val deliverability = MutableStateFlow<DeliverabilityReport?>(null)
 
-    fun restore(s: CampaignSnapshotData) {
+    fun restore(s: CampaignSnapshotData, storedDrafts: List<StudioDraftEntity> = emptyList()) {
         domains.value = s.domains
         contacts.value = s.contacts.associateBy { it.email.ifBlank { it.domain } }
         if (s.contacts.isNotEmpty()) {
@@ -78,6 +87,7 @@ class CampaignSession {
         }
         selected.value = s.selected
         contexts.value = s.contexts.associateBy { it.domain }
+        persistedDrafts.value = storedDrafts.associateBy { it.key }
         matches.value = emptyList()
         drafts.value = emptyList()
     }
@@ -90,6 +100,7 @@ class CampaignSession {
         selected.value = emptySet()
         contexts.value = emptyMap()
         drafts.value = emptyList()
+        persistedDrafts.value = emptyMap()
     }
 }
 
@@ -99,6 +110,7 @@ class App : Application() {
     lateinit var ai: AiClient
     lateinit var enricher: Enricher
     lateinit var inbox: InboxClient
+    lateinit var deliverability: DeliverabilityChecker
     lateinit var engine: SendEngine
     val session = CampaignSession()
     val ok: OkHttpClient = OkHttpClient()
@@ -108,26 +120,56 @@ class App : Application() {
         super.onCreate()
         PDFBoxResourceLoader.init(applicationContext)
         db = Room.databaseBuilder(this, AppDatabase::class.java, "sali.db")
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
             .build()
         prefs = Prefs(this)
         ai = AiClient(ok)
-        enricher = Enricher(ok)
+        enricher = Enricher(ok, db.companyCacheDao())
         inbox = InboxClient()
+        deliverability = DeliverabilityChecker(ok)
         engine = SendEngine(this, db, prefs, ok)
 
-        val saved = runBlocking(Dispatchers.IO) { db.campaignDao().active() }
-        session.restore(CampaignSnapshot.decode(saved?.payload))
+        val (saved, storedDrafts) = runBlocking(Dispatchers.IO) {
+            db.campaignDao().active() to db.studioDraftDao().all()
+        }
+        session.restore(CampaignSnapshot.decode(saved?.payload), storedDrafts)
         persistCampaign()
+    }
+
+    fun persistDraft(item: CampaignDraftItem) {
+        val altsJson = JSONArray().apply { item.subjectAlternatives.forEach { put(it) } }.toString()
+        val entity = StudioDraftEntity(
+            key = item.key,
+            domain = item.domain,
+            email = item.email,
+            name = item.name,
+            style = item.style,
+            subject = item.subject,
+            preheader = item.preheader,
+            body = item.body,
+            subjectAltsJson = altsJson,
+            generated = item.generated,
+            approved = item.approved,
+            messageUuid = item.messageUuid,
+            modelUsed = item.modelUsed,
+            updatedAt = System.currentTimeMillis()
+        )
+        session.persistedDrafts.value = session.persistedDrafts.value + (item.key to entity)
+        appScope.launch {
+            db.studioDraftDao().upsert(entity)
+        }
     }
 
     suspend fun clearAllData() = withContext(Dispatchers.IO) {
         db.messageDao().clearAll()
         db.logDao().clearAll()
         db.campaignDao().clearAll()
+        db.companyCacheDao().clearAll()
+        db.studioDraftDao().clearAll()
         prefs.clear()
         enricher.clearCache()
         session.reset()
+        session.deliverability.value = null
         engine.refreshLogs()
     }
 

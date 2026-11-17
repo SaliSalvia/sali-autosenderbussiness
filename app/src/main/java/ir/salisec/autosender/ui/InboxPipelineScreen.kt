@@ -8,14 +8,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
@@ -102,6 +107,7 @@ private fun PipelineTab(app: App) {
     val scope = rememberCoroutineScope()
     var list by remember { mutableStateOf(listOf<MessageEntity>()) }
     var busy by remember { mutableStateOf(false) }
+    var syncing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var okMsg by remember { mutableStateOf<String?>(null) }
     var draft by remember { mutableStateOf<FollowDraft?>(null) }
@@ -127,6 +133,69 @@ private fun PipelineTab(app: App) {
         val order = listOf("SENT", "REPLIED", "NEGOTIATING", "PAID", "LOST")
         val i = order.indexOf(current)
         return order[(i + 1).mod(order.size)]
+    }
+
+    /** Automatically scans INBOX via IMAP for customer replies, opt-outs, and bounce failures. */
+    fun syncRepliesAndBounces() {
+        scope.launch {
+            val s = app.prefs.load()
+            if (!s.hasIncomingConfigured()) {
+                error = "برای همگام‌سازی خودکار پاسخ‌ها، IMAP را در تنظیمات (یا جادوگر ایمیل) کامل کنید."
+                return@launch
+            }
+            syncing = true
+            error = null
+            okMsg = null
+            try {
+                val inboxMsgs = app.inbox.list(s, limit = 60)
+                val sentLeads = app.db.messageDao().all().filter { it.status == "SENT" }
+                var repliesMatched = 0
+                var bouncesMatched = 0
+                var optOutsMatched = 0
+
+                for (msg in inboxMsgs) {
+                    if (msg.isBounce && !msg.bouncedAddress.isNullOrBlank()) {
+                        val bAddr = msg.bouncedAddress.lowercase()
+                        app.prefs.addSuppressed(bAddr)
+                        val matched = sentLeads.filter { it.email.equals(bAddr, true) && it.pipelineState != "LOST" }
+                        matched.forEach { lead ->
+                            app.db.messageDao().update(
+                                lead.copy(
+                                    pipelineState = "LOST",
+                                    lastError = "Hard Bounce: آدرس مقصد نامعتبر است",
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            )
+                        }
+                        if (matched.isNotEmpty()) bouncesMatched++
+                    } else {
+                        val senderAddr = inboxEmailRegex.find(msg.from)?.value?.lowercase() ?: continue
+                        val matched = sentLeads.filter { it.email.equals(senderAddr, true) }
+                        if (matched.isNotEmpty()) {
+                            val isOptOut = detectOptOut("${msg.subject}\n${msg.preview}")
+                            if (isOptOut) {
+                                app.prefs.addSuppressed(senderAddr)
+                                app.prefs.addSuppressed(senderAddr.substringAfter('@'))
+                                matched.filter { it.pipelineState != "PAID" }.forEach { lead ->
+                                    app.db.messageDao().update(lead.copy(pipelineState = "LOST", status = "SKIPPED"))
+                                }
+                                optOutsMatched++
+                            } else {
+                                matched.filter { it.pipelineState == "SENT" }.forEach { lead ->
+                                    app.db.messageDao().update(lead.copy(pipelineState = "REPLIED"))
+                                    repliesMatched++
+                                }
+                            }
+                        }
+                    }
+                }
+                reload()
+                okMsg = "همگام‌سازی کامل شد ✓ | $repliesMatched پاسخ جدید، $optOutsMatched خروج، $bouncesMatched برگشتی (Bounce)"
+            } catch (e: Exception) {
+                error = "خطای همگام‌سازی IMAP: ${e.message?.take(140)}"
+            }
+            syncing = false
+        }
     }
 
     fun generateFollowUp(m: MessageEntity) {
@@ -158,7 +227,7 @@ private fun PipelineTab(app: App) {
                     contactName = m.name,
                     context = ctx,
                     aggregate = null,
-                    style = "DIRECT",
+                    style = m.styleUsed.ifBlank { "DIRECT" },
                     isFollowUp = true,
                     previousBody = m.body,
                     domain = m.domain,
@@ -172,7 +241,7 @@ private fun PipelineTab(app: App) {
         }
     }
 
-    Section(header = "وضعیت سرنخ‌ها", icon = Icons.Default.TrendingUp) {
+    Section(header = "وضعیت سرنخ‌ها و تحلیل فروش", icon = Icons.Default.TrendingUp) {
         val sent = list.count { it.pipelineState == "SENT" && !it.isFollowUp }
         val replied = list.count { it.pipelineState == "REPLIED" }
         val neg = list.count { it.pipelineState == "NEGOTIATING" }
@@ -188,6 +257,37 @@ private fun PipelineTab(app: App) {
             Chip("پرداخت $paid", GreenOk)
             Chip("از دست رفته $lost", RedErr)
         }
+
+        // Conversion analytics by style
+        val styledSent = list.filter { it.status == "SENT" && it.styleUsed.isNotBlank() }
+        if (styledSent.isNotEmpty()) {
+            val byStyle = styledSent.groupBy { it.styleUsed }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                byStyle.forEach { (st, items) ->
+                    val conv = items.count { it.pipelineState in setOf("REPLIED", "NEGOTIATING", "PAID") }
+                    val label = when (st) {
+                        "BUSINESS" -> "فروش"
+                        "TECHNICAL" -> "فنی"
+                        else -> "مستقیم"
+                    }
+                    Chip("سبک $label: $conv/${items.size} تعامل", MaterialTheme.colorScheme.tertiary)
+                }
+            }
+        }
+
+        OutlinedButton(
+            onClick = { syncRepliesAndBounces() },
+            enabled = !syncing,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(if (syncing) "در حال بررسی پاسخ‌ها و Bounceهای IMAP..." else "همگام‌سازی خودکار پاسخ‌ها و Bounceها از IMAP")
+        }
+
         SubTitle("با کلیک روی «تغییر مرحله» وضعیت سرنخ را به‌روز کنید: SENT → REPLIED → NEGOTIATING → PAID → LOST")
     }
 
@@ -285,7 +385,9 @@ private fun PipelineTab(app: App) {
                                     messageUuid = UUID.randomUUID().toString(),
                                     campaignId = "active",
                                     status = "APPROVED",
-                                    isFollowUp = true
+                                    isFollowUp = true,
+                                    styleUsed = d.original.styleUsed,
+                                    modelUsed = d.result.modelUsed
                                 )
                             )
                             draft = null
@@ -311,6 +413,7 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
     var messages by remember { mutableStateOf(listOf<InboxMessage>()) }
     var open by remember { mutableStateOf<InboxMessage?>(null) }
     var openText by remember { mutableStateOf("") }
+    var openMessageId by remember { mutableStateOf<String?>(null) }
     var replyText by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
     val s = remember { app.prefs.load() }
@@ -331,13 +434,13 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
     }
 
     LaunchedEffect(Unit) {
-        if (s.imapHost.isNotBlank() && s.imapUser.isNotBlank() && s.imapPass.isNotBlank()) load()
+        if (s.hasIncomingConfigured()) load()
     }
 
     notice?.let { Chip(it, GreenOk) }
     error?.let { Chip(it, RedErr) }
 
-    if (s.imapHost.isBlank() || s.imapUser.isBlank() || s.imapPass.isBlank()) {
+    if (!s.hasIncomingConfigured()) {
         Section(header = "تنظیم IMAP", icon = Icons.Default.Inbox) {
             SubTitle("برای مشاهده پاسخ مشتریان و تشخیص خودکار درخواست‌های حذف (opt-out)، مشخصات IMAP را در تنظیمات وارد کنید.")
             OutlinedButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
@@ -355,13 +458,18 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                    border = BorderStroke(
+                        1.dp,
+                        if (m.isBounce) RedErr.copy(alpha = 0.55f)
+                        else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                    ),
                     modifier = Modifier.fillMaxWidth().clickable {
                         scope.launch {
                             error = null
                             try {
-                                val (_, body) = app.inbox.read(s, m.position)
+                                val (_, body, msgId) = app.inbox.read(s, m.position)
                                 openText = body
+                                openMessageId = msgId ?: m.messageId
                                 open = m
                             } catch (e: Exception) {
                                 error = "خواندن پیام ناموفق: " + (e.message?.take(120) ?: "")
@@ -373,6 +481,9 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text(m.from, fontSize = 12.sp, modifier = Modifier.weight(1f))
                             Text(fmt.format(Date(m.date)), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (m.isBounce) {
+                            Chip("گزارش برگشت ایمیل (Bounce: ${m.bouncedAddress ?: "?"})", RedErr)
                         }
                         Text(m.subject.ifBlank { "(بدون موضوع)" }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                         SubTitle(m.preview)
@@ -420,9 +531,11 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                                 ?: throw IllegalStateException("آدرس فرستنده پیدا نشد")
                             val out = OutgoingMessage(
                                 to = to,
-                                subject = "Re: " + m.subject,
+                                subject = if (m.subject.startsWith("Re:", true)) m.subject else "Re: " + m.subject,
                                 htmlBody = replyText,
-                                textBody = replyText
+                                textBody = replyText,
+                                inReplyToMessageId = openMessageId,
+                                references = openMessageId
                             )
                             val sender = if (s.sendMode == "BREVO_API") BrevoSender(app.ok) else SmtpSender()
                             sender.send(s, out)

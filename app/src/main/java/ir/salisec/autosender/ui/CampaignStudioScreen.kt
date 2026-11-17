@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.ForwardToInbox
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.UploadFile
@@ -39,6 +40,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -81,6 +84,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import java.util.UUID
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -97,14 +101,19 @@ fun CampaignStudioScreen(
     val matches by app.session.matches.collectAsState()
     val selected by app.session.selected.collectAsState()
     val drafts by app.session.drafts.collectAsState()
+    val persistedDrafts by app.session.persistedDrafts.collectAsState()
 
     var step by remember { mutableIntStateOf(if (drafts.isNotEmpty()) 1 else 0) }
     var scanning by remember { mutableStateOf(false) }
     var scanError by remember { mutableStateOf<String?>(null) }
     var sitestUri by remember { mutableStateOf(app.prefs.load().sitestFolderUri) }
+    var matchSearch by remember { mutableStateOf("") }
+    var matchFilter by remember { mutableStateOf("ALL") } // ALL | READY | MISSING
+
     var batchGenerating by remember { mutableStateOf(false) }
     var batchProgressText by remember { mutableStateOf("") }
     var genError by remember { mutableStateOf<String?>(null) }
+    var testNotice by remember { mutableStateOf<String?>(null) }
     var activeModelLabel by remember { mutableStateOf(app.prefs.load().hcnsModel) }
     var defaultStyle by remember { mutableStateOf("BUSINESS") }
 
@@ -153,6 +162,18 @@ fun CampaignStudioScreen(
             ReportReader.initialSitestTreeUri()
         } else null
         treePicker.launch(initUri)
+    }
+
+    fun openPdfPreview(uriString: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(Uri.parse(uriString), "application/pdf")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            scanError = "اپلیکیشنی برای باز کردن PDF روی گوشی پیدا نشد."
+        }
     }
 
     fun runAutoMatchScan() {
@@ -218,11 +239,11 @@ fun CampaignStudioScreen(
         }
     }
 
-    // Automatic matching whenever emails or sitest folder changes (debounced for typing speed)
+    // Automatic matching whenever emails or sitest folder changes
     val contactsSignature = remember(contacts) { contacts.joinToString("|") { it.email } }
     LaunchedEffect(contactsSignature, sitestUri) {
         if (contacts.isNotEmpty() && sitestUri.isNotBlank()) {
-            delay(450)
+            delay(400)
             runAutoMatchScan()
         } else if (contacts.isEmpty()) {
             app.session.matches.value = emptyList()
@@ -232,22 +253,63 @@ fun CampaignStudioScreen(
 
     fun prepareDraftsAndGoToStep2() {
         val currentMap = drafts.associateBy { it.key }
+        val s = app.prefs.load()
+        val scores = matches.mapNotNull { it.report?.score }
+        val aggregate = if (scores.isEmpty()) null else AggregateStats(scores.size, scores.average().toInt())
+
         val nextDrafts = selected.mapNotNull { key ->
             val m = matches.firstOrNull { it.key == key } ?: return@mapNotNull null
-            currentMap[key]?.copy(match = m) ?: CampaignDraftItem(
-                key = key,
-                domain = m.domain,
-                email = m.email,
-                name = m.contactName,
-                match = m,
-                style = defaultStyle
-            )
+            currentMap[key]?.copy(match = m) ?: run {
+                val saved = persistedDrafts[key]
+                if (saved != null && saved.generated) {
+                    val alts = try {
+                        val arr = JSONArray(saved.subjectAltsJson)
+                        (0 until arr.length()).mapNotNull { arr.optString(it).takeIf { x -> x.isNotBlank() } }
+                    } catch (_: Exception) { emptyList() }
+                    val restored = CampaignDraftItem(
+                        key = key,
+                        domain = m.domain,
+                        email = m.email,
+                        name = m.contactName,
+                        match = m,
+                        style = saved.style,
+                        subject = saved.subject,
+                        preheader = saved.preheader,
+                        body = saved.body,
+                        subjectAlternatives = alts,
+                        generated = saved.generated,
+                        approved = saved.approved,
+                        messageUuid = saved.messageUuid,
+                        modelUsed = saved.modelUsed
+                    )
+                    val q = app.ai.check(
+                        result = restored.toResult(),
+                        s = s,
+                        bundle = m.bundle,
+                        aggregate = aggregate,
+                        contactName = m.contactName,
+                        isFollowUp = false,
+                        domain = m.domain,
+                        email = m.email
+                    )
+                    restored.copy(quality = q)
+                } else {
+                    CampaignDraftItem(
+                        key = key,
+                        domain = m.domain,
+                        email = m.email,
+                        name = m.contactName,
+                        match = m,
+                        style = defaultStyle
+                    )
+                }
+            }
         }
         app.session.drafts.value = nextDrafts
         step = 1
     }
 
-    fun updateDraft(key: String, transform: (CampaignDraftItem) -> CampaignDraftItem) {
+    fun updateDraft(key: String, persist: Boolean = true, transform: (CampaignDraftItem) -> CampaignDraftItem) {
         val list = app.session.drafts.value.toMutableList()
         val idx = list.indexOfFirst { it.key == key }
         if (idx < 0) return
@@ -275,8 +337,12 @@ fun CampaignStudioScreen(
                 app.db.messageDao().demote(uuid, "متن پس از تأیید ویرایش شد؛ نیاز به تأیید دوباره")
             }
         }
-        list[idx] = if (current.approved) reviewed.copy(approved = false) else reviewed
+        val finalItem = if (current.approved) reviewed.copy(approved = false) else reviewed
+        list[idx] = finalItem
         app.session.drafts.value = list
+        if (persist && finalItem.generated) {
+            app.persistDraft(finalItem)
+        }
     }
 
     suspend fun approveSingleDraft(item: CampaignDraftItem): String? {
@@ -340,7 +406,9 @@ fun CampaignStudioScreen(
             qualityOk = true,
             messageUuid = uuid,
             campaignId = "active",
-            status = "APPROVED"
+            status = "APPROVED",
+            styleUsed = item.style,
+            modelUsed = item.modelUsed
         )
         withContext(Dispatchers.IO) {
             if (existing != null) app.db.messageDao().update(entity)
@@ -349,8 +417,10 @@ fun CampaignStudioScreen(
         val list = app.session.drafts.value.toMutableList()
         val idx = list.indexOfFirst { it.key == item.key }
         if (idx >= 0) {
-            list[idx] = item.copy(approved = true, quality = q, messageUuid = uuid, error = null)
+            val approvedItem = item.copy(approved = true, quality = q, messageUuid = uuid, error = null)
+            list[idx] = approvedItem
             app.session.drafts.value = list
+            app.persistDraft(approvedItem)
         }
         return null
     }
@@ -360,6 +430,7 @@ fun CampaignStudioScreen(
         scope.launch {
             batchGenerating = true
             genError = null
+            testNotice = null
             try {
                 var s = app.prefs.load()
                 if (s.hcnsKey.isBlank()) {
@@ -405,7 +476,7 @@ fun CampaignStudioScreen(
                             gate.withPermit {
                                 val snapshotItem = app.session.drafts.value.firstOrNull { it.key == key }
                                     ?: return@withPermit
-                                updateDraft(key) {
+                                updateDraft(key, persist = false) {
                                     it.copy(generating = true, error = null, statusNote = "جستجوی کسب‌وکار در You.com...")
                                 }
                                 try {
@@ -418,8 +489,8 @@ fun CampaignStudioScreen(
                                             }
                                         }
 
-                                    updateDraft(key) {
-                                        it.copy(statusNote = "طراحی متن با ${activeModelLabel.ifBlank { "AI" }}...")
+                                    updateDraft(key, persist = false) {
+                                        it.copy(statusNote = "طراحی متن با ${activeModelLabel.ifBlank { "AI" }} (پاس کامل)...")
                                     }
 
                                     val r = app.ai.generate(
@@ -443,7 +514,7 @@ fun CampaignStudioScreen(
                                             activeModelLabel = probe.selectedModel
                                         }
                                     )
-                                    updateDraft(key) {
+                                    updateDraft(key, persist = true) {
                                         it.copy(
                                             subject = r.subject,
                                             preheader = r.preheader,
@@ -453,11 +524,12 @@ fun CampaignStudioScreen(
                                             generated = true,
                                             approved = false,
                                             generating = false,
-                                            statusNote = ""
+                                            statusNote = "",
+                                            modelUsed = r.modelUsed.ifBlank { activeModelLabel }
                                         )
                                     }
                                 } catch (e: Exception) {
-                                    updateDraft(key) {
+                                    updateDraft(key, persist = false) {
                                         it.copy(
                                             generating = false,
                                             statusNote = "",
@@ -488,7 +560,7 @@ fun CampaignStudioScreen(
                 shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
                 modifier = Modifier.testTag("studio_step_1")
             ) {
-                Text("۱. ایمیل‌ها و پوشه sitest", maxLines = 1)
+                Text("۱. لیست سطری و sitest", maxLines = 1)
             }
             SegmentedButton(
                 selected = step == 1,
@@ -506,21 +578,32 @@ fun CampaignStudioScreen(
 
         if (step == 0) {
             Section(
-                header = "ورود لیست ایمیل‌ها",
+                header = "ورود گروهی آدرس ایمیل‌ها (هر سطر یک ایمیل)",
                 icon = Icons.Default.Email,
-                badge = if (contacts.isNotEmpty()) "${contacts.size} ایمیل معتبر" else null,
+                badge = if (contacts.isNotEmpty()) "${contacts.size} ایمیل" else null,
                 badgeColor = GreenOk
             ) {
-                SubTitle("آدرس‌های ایمیل را وارد یا Paste کنید (هر خط یک ایمیل، یا با کاما/فاصله، یا فایل CSV). دامنه و پوشه sitest به صورت خودکار تشخیص داده می‌شوند.")
-                LabeledField(
-                    label = "لیست ایمیل‌های هدف",
+                SubTitle("آدرس‌های ایمیل هدف را به صورت گروهی (هر ایمیل در یک سطر) اینجا وارد یا Paste کنید؛ همچنین فرمت CSV یا ورود از فایل پشتیبانی می‌شود.")
+                OutlinedTextField(
                     value = rawInput,
-                    multiline = true,
-                    placeholder = "ceo@inchand.com\ninfo@numberland.ir\nsalar@example.com",
-                    modifier = Modifier.testTag("campaign_emails_input")
-                ) {
-                    app.session.rawEmailsInput.value = it
-                }
+                    onValueChange = { app.session.rawEmailsInput.value = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("campaign_emails_input"),
+                    placeholder = {
+                        Text(
+                            "ceo@inchand.com\ninfo@numberland.ir\nsalar@example.com",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    },
+                    minLines = 6,
+                    maxLines = 15,
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+                    )
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -531,10 +614,13 @@ fun CampaignStudioScreen(
                     ) {
                         Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("ورود فایل CSV / TXT")
+                        Text("بارگذاری فایل TXT / CSV")
                     }
                     if (rawInput.isNotBlank()) {
-                        TextButton(onClick = { app.session.reset() }) {
+                        TextButton(onClick = {
+                            scope.launch { app.db.studioDraftDao().clearAll() }
+                            app.session.reset()
+                        }) {
                             Text("پاک کردن", color = RedErr)
                         }
                     }
@@ -592,11 +678,50 @@ fun CampaignStudioScreen(
                     if (scanning) {
                         LoadingBox("در حال جستجوی خودکار پوشه‌ها و استخراج ۲ PDF جدیدترین...")
                     } else if (matches.isNotEmpty()) {
+                        // Search & filter controls for quick scanning of large lead lists
+                        if (matches.size > 4) {
+                            LabeledField(
+                                label = "جستجو در ایمیل یا دامنه",
+                                value = matchSearch,
+                                singleLine = true,
+                                placeholder = "مثلاً inchand"
+                            ) { matchSearch = it }
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                listOf(
+                                    "ALL" to "همه (${matches.size})",
+                                    "READY" to "آماده (${matches.count { it.readyForApproval }})",
+                                    "MISSING" to "ناقص (${matches.count { !it.readyForApproval }})"
+                                ).forEach { (code, lbl) ->
+                                    FilterChip(
+                                        selected = matchFilter == code,
+                                        onClick = { matchFilter = code },
+                                        label = { Text(lbl) }
+                                    )
+                                }
+                            }
+                        }
+
+                        val filteredMatches = remember(matches, matchSearch, matchFilter) {
+                            matches.filter { m ->
+                                val qOk = matchSearch.isBlank() ||
+                                    m.email.contains(matchSearch, true) ||
+                                    m.domain.contains(matchSearch, true) ||
+                                    (m.folderName?.contains(matchSearch, true) == true)
+                                val fOk = when (matchFilter) {
+                                    "READY" -> m.readyForApproval
+                                    "MISSING" -> !m.readyForApproval
+                                    else -> true
+                                }
+                                qOk && fOk
+                            }
+                        }
+
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            matches.forEach { m ->
+                            filteredMatches.forEach { m ->
                                 MatchCard(
                                     m = m,
                                     checked = selected.contains(m.key),
+                                    onOpenPdf = { uri -> openPdfPreview(uri) },
                                     onToggle = { chk ->
                                         val next = app.session.selected.value.toMutableSet()
                                         if (chk) next.add(m.key) else next.remove(m.key)
@@ -606,7 +731,7 @@ fun CampaignStudioScreen(
                             }
                         }
                     } else if (contacts.isEmpty()) {
-                        SubTitle("پس از ورود ایمیل‌ها، برنامه به صورت خودکار پوشه‌های هم‌نام را در sitest پیدا می‌کند.")
+                        SubTitle("پس از ورود ایمیل‌ها در کادر بالا، برنامه به صورت خودکار پوشه‌های هم‌نام را در sitest پیدا می‌کند.")
                     }
                 }
             }
@@ -620,17 +745,31 @@ fun CampaignStudioScreen(
                 prepareDraftsAndGoToStep2()
             }
         } else {
-            // STEP 2: You.com + hcnsec Strongest Model + Review/Approve
+            // STEP 2: You.com + hcnsec Strongest Model + 4 Reference Templates + Review/Approve
             val contextsMap by app.session.contexts.collectAsState()
+            val currentSettings = app.prefs.load()
+            val tplCount = currentSettings.referenceTemplates().size
             val approvedCount = drafts.count { it.approved }
             val readyToApproveCount = drafts.count { it.generated && !it.approved && it.quality.passed }
 
             Section(
-                header = "تنظیم سبک و تولید هوشمند پیام‌ها",
+                header = "تنظیم سبک، ۴ الگوی مرجع و تولید هوشمند",
                 icon = Icons.Default.AutoAwesome,
                 badge = if (activeModelLabel.isNotBlank()) activeModelLabel else "انتخاب خودکار قوی‌ترین مدل",
                 badgeColor = if (activeModelLabel.isNotBlank()) GreenOk else OrangeWarn
             ) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Chip(
+                        if (tplCount > 0) "$tplCount الگوی ساختاری فعال (کلیک برای ویرایش)" else "بدون الگوی مرجع — کلیک برای افزودن ۴ الگو",
+                        if (tplCount > 0) GreenOk else OrangeWarn,
+                        onClick = onOpenSettings
+                    )
+                    Chip("پاس دو مرحله‌ای ویراستار فروش: ${if (currentSettings.enableCriticPass) "فعال ✓" else "خاموش"}", GreenOk)
+                }
+
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(
                         "BUSINESS" to "فروش B2B",
@@ -650,7 +789,6 @@ fun CampaignStudioScreen(
                     }
                 }
 
-                val currentSettings = app.prefs.load()
                 if (currentSettings.hcnsKey.isBlank() || currentSettings.youKey.isBlank()) {
                     Chip(
                         if (currentSettings.hcnsKey.isBlank()) "کلید hcnsec وارد نشده است (کلیک برای تنظیمات)"
@@ -675,6 +813,7 @@ fun CampaignStudioScreen(
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 genError?.let { Chip(it, RedErr) }
+                testNotice?.let { Chip(it, GreenOk) }
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -686,6 +825,22 @@ fun CampaignStudioScreen(
                         onSubject = { v -> updateDraft(item.key) { it.copy(subject = v) } },
                         onPreheader = { v -> updateDraft(item.key) { it.copy(preheader = v) } },
                         onBody = { v -> updateDraft(item.key) { it.copy(body = v) } },
+                        onOpenPdf = { uri -> openPdfPreview(uri) },
+                        onSendTestToSelf = {
+                            scope.launch {
+                                genError = null
+                                testNotice = null
+                                val res = app.engine.sendTestToSelf(
+                                    subject = item.subject,
+                                    preheader = item.preheader,
+                                    body = item.body,
+                                    attachmentUris = item.match.attachmentUris,
+                                    attachmentNames = item.match.attachmentNames
+                                )
+                                res.onSuccess { testNotice = it }
+                                    .onFailure { genError = "خطای ارسال تست: ${it.message?.take(140)}" }
+                            }
+                        },
                         onRegenerate = { generateBatch(listOf(item.key)) },
                         onApprove = {
                             scope.launch {
@@ -718,7 +873,7 @@ fun CampaignStudioScreen(
             }
 
             BigButton(
-                text = if (approvedCount > 0) "صف ارسال آماده است ($approvedCount پیام) ←"
+                text = if (approvedCount > 0) "صف ارسال آماده و بررسی ضداسپم ($approvedCount پیام) ←"
                 else "ابتدا پیام‌ها را تولید و تأیید کنید",
                 enabled = approvedCount > 0,
                 icon = Icons.Default.Send,
@@ -736,6 +891,7 @@ fun CampaignStudioScreen(
 private fun MatchCard(
     m: DomainMatch,
     checked: Boolean,
+    onOpenPdf: (String) -> Unit,
     onToggle: (Boolean) -> Unit
 ) {
     Surface(
@@ -785,7 +941,7 @@ private fun MatchCard(
                     m.report?.findings?.let { Chip("$it یافته", MaterialTheme.colorScheme.primary) }
                     m.bundle.trialAttachments.forEach { pdf ->
                         val sizeMb = String.format(java.util.Locale.US, "%.2f MB", pdf.sizeBytes / (1024.0 * 1024.0))
-                        Chip("${pdf.name} (${pdf.pages ?: "?"} ص • $sizeMb)", GreenOk)
+                        Chip("${pdf.name} (${pdf.pages ?: "?"} ص • $sizeMb)", GreenOk, onClick = { onOpenPdf(pdf.uri) })
                     }
                 }
 
@@ -806,6 +962,8 @@ private fun DraftReviewCard(
     onSubject: (String) -> Unit,
     onPreheader: (String) -> Unit,
     onBody: (String) -> Unit,
+    onOpenPdf: (String) -> Unit,
+    onSendTestToSelf: () -> Unit,
     onRegenerate: () -> Unit,
     onApprove: () -> Unit
 ) {
@@ -836,6 +994,7 @@ private fun DraftReviewCard(
                     Text(item.email, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     SubTitle(
                         item.domain +
+                            (item.modelUsed.takeIf { it.isNotBlank() }?.let { " • $it" } ?: "") +
                             (item.subject.takeIf { it.isNotBlank() }?.let { " • $it" } ?: "")
                     )
                 }
@@ -860,7 +1019,7 @@ private fun DraftReviewCard(
 
             AnimatedVisibility(visible = expanded) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Attached 2 newest PDFs preview
+                    // Attached 2 newest PDFs preview (tappable to open PDF viewer)
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -868,7 +1027,8 @@ private fun DraftReviewCard(
                         item.match.bundle.trialAttachments.forEach { pdf ->
                             Surface(
                                 shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                                modifier = Modifier.clickable { onOpenPdf(pdf.uri) }
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -889,7 +1049,7 @@ private fun DraftReviewCard(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                "تحلیل You.com: " + companySummary.take(220),
+                                "تحلیل You.com: " + companySummary.take(260),
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.padding(10.dp)
                             )
@@ -929,6 +1089,17 @@ private fun DraftReviewCard(
                     if (item.generated) {
                         item.quality.blockers.forEach { SubTitle("⛔ $it", color = RedErr) }
                         item.quality.issues.take(2).forEach { SubTitle("• $it", color = OrangeWarn) }
+                    }
+
+                    if (item.generated && item.subject.isNotBlank() && item.body.isNotBlank()) {
+                        OutlinedButton(
+                            onClick = onSendTestToSelf,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.ForwardToInbox, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("ارسال تست این ایمیل به خودم (با ۲ پیوست)")
+                        }
                     }
 
                     Row(

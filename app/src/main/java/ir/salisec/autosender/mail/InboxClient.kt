@@ -13,25 +13,46 @@ data class InboxMessage(
     val from: String,
     val subject: String,
     val date: Long,
-    val preview: String
+    val preview: String,
+    val messageId: String? = null,
+    val isBounce: Boolean = false,
+    val bouncedAddress: String? = null
 )
 
-/** Minimal IMAP inbox client (Thunderbird-like basics: list, read). */
+/** IMAP inbox client supporting SSL (993) and STARTTLS (143), with Message-ID & bounce parsing. */
 class InboxClient {
 
-    private fun session(s: Settings): Session =
-        Session.getInstance(Properties().apply {
-            put("mail.store.protocol", "imaps")
-            put("mail.imaps.host", s.imapHost)
-            put("mail.imaps.port", s.imapPort.toString())
-            put("mail.imaps.connectiontimeout", "20000")
-            put("mail.imaps.timeout", "30000")
-            put("mail.imaps.ssl.checkserveridentity", "true")
+    private val bounceSenders = listOf("mailer-daemon", "postmaster", "mail delivery subsystem", "bounce")
+    private val emailRegex = Regex("""[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}""")
+
+    private fun protocol(s: Settings): String = if (s.imapSecurity == "STARTTLS") "imap" else "imaps"
+
+    private fun session(s: Settings): Session {
+        val useStartTls = s.imapSecurity == "STARTTLS"
+        return Session.getInstance(Properties().apply {
+            if (useStartTls) {
+                put("mail.store.protocol", "imap")
+                put("mail.imap.host", s.imapHost)
+                put("mail.imap.port", s.imapPort.toString())
+                put("mail.imap.starttls.enable", "true")
+                put("mail.imap.starttls.required", "true")
+                put("mail.imap.ssl.checkserveridentity", "true")
+                put("mail.imap.connectiontimeout", "20000")
+                put("mail.imap.timeout", "30000")
+            } else {
+                put("mail.store.protocol", "imaps")
+                put("mail.imaps.host", s.imapHost)
+                put("mail.imaps.port", s.imapPort.toString())
+                put("mail.imaps.connectiontimeout", "20000")
+                put("mail.imaps.timeout", "30000")
+                put("mail.imaps.ssl.checkserveridentity", "true")
+            }
         })
+    }
 
     suspend fun list(s: Settings, limit: Int = 50): List<InboxMessage> = withContext(Dispatchers.IO) {
-        val store = session(s).getStore("imaps")
-        store.connect(s.imapHost, s.imapUser, s.imapPass)
+        val store = session(s).getStore(protocol(s))
+        store.connect(s.imapHost, s.imapPort, s.imapUser, s.imapPass)
         try {
             val folder = store.getFolder("INBOX")
             folder.open(Folder.READ_ONLY)
@@ -42,31 +63,64 @@ class InboxClient {
                 for (i in total downTo from) {
                     val m = folder.getMessage(i) as MimeMessage
                     val body = bodyText(m)
-                    out.add(InboxMessage(
-                        position = total - i,
-                        from = (m.from?.firstOrNull()?.toString() ?: ""),
-                        subject = m.subject ?: "",
-                        date = m.sentDate?.time ?: 0L,
-                        preview = body.replace("\\s+".toRegex(), " ").take(90)
-                    ))
+                    val fromStr = m.from?.firstOrNull()?.toString() ?: ""
+                    val subj = m.subject ?: ""
+                    val msgId = m.getHeader("Message-ID")?.firstOrNull()
+                    val isBounce = isBounceMessage(fromStr, subj, body)
+                    val bouncedAddr = if (isBounce) extractBouncedEmail(body, s.fromEmail) else null
+                    out.add(
+                        InboxMessage(
+                            position = total - i,
+                            from = fromStr,
+                            subject = subj,
+                            date = m.sentDate?.time ?: 0L,
+                            preview = body.replace("\\s+".toRegex(), " ").take(110),
+                            messageId = msgId,
+                            isBounce = isBounce,
+                            bouncedAddress = bouncedAddr
+                        )
+                    )
                 }
                 out
             } finally { folder.close(false) }
         } finally { store.close() }
     }
 
-    suspend fun read(s: Settings, position: Int): Pair<String, String> = withContext(Dispatchers.IO) {
-        val store = session(s).getStore("imaps")
-        store.connect(s.imapHost, s.imapUser, s.imapPass)
+    suspend fun read(s: Settings, position: Int): Triple<String, String, String?> = withContext(Dispatchers.IO) {
+        val store = session(s).getStore(protocol(s))
+        store.connect(s.imapHost, s.imapPort, s.imapUser, s.imapPass)
         try {
             val folder = store.getFolder("INBOX")
             folder.open(Folder.READ_ONLY)
             try {
                 val total = folder.messageCount
                 val m = folder.getMessage(total - position) as MimeMessage
-                (m.subject ?: "") to bodyText(m)
+                val msgId = m.getHeader("Message-ID")?.firstOrNull()
+                Triple(m.subject ?: "", bodyText(m), msgId)
             } finally { folder.close(false) }
         } finally { store.close() }
+    }
+
+    private fun isBounceMessage(from: String, subject: String, body: String): Boolean {
+        val f = from.lowercase()
+        val s = subject.lowercase()
+        if (bounceSenders.any { f.contains(it) }) return true
+        return s.contains("undelivered") || s.contains("delivery status") ||
+            s.contains("failure notice") || s.contains("returned mail") ||
+            body.lowercase().contains("550 5.1.1")
+    }
+
+    private fun extractBouncedEmail(body: String, ownFromEmail: String): String? {
+        val own = ownFromEmail.trim().lowercase()
+        return emailRegex.findAll(body)
+            .map { it.value.lowercase() }
+            .firstOrNull { addr ->
+                addr != own &&
+                    !addr.contains("mailer-daemon") &&
+                    !addr.contains("postmaster") &&
+                    !addr.endsWith(".png") &&
+                    !addr.endsWith(".jpg")
+            }
     }
 
     private fun bodyText(m: MimeMessage): String {

@@ -55,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import ir.salisec.autosender.ui.CampaignStudioScreen
+import ir.salisec.autosender.ui.EmailSetupWizard
 import ir.salisec.autosender.ui.HomeScreen
 import ir.salisec.autosender.ui.PipelineInboxScreen
 import ir.salisec.autosender.ui.SaliTheme
@@ -87,13 +88,14 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppShell(app: App) {
-    var current by remember { mutableStateOf<Screen>(Screen.Home) }
+    val firstRunSetup = remember { app.prefs.load().isThunderbirdSetupNeeded() }
+    var current by remember { mutableStateOf<Screen>(if (firstRunSetup) Screen.EmailSetup else Screen.Home) }
     var previousTab by remember { mutableStateOf<Screen>(Screen.Home) }
     var pendingCount by remember { mutableIntStateOf(0) }
     val sendState by app.engine.state.collectAsState()
 
     fun navigate(target: Screen) {
-        if (target != Screen.Settings) {
+        if (target != Screen.Settings && target != Screen.EmailSetup) {
             previousTab = target
         }
         current = target
@@ -109,7 +111,7 @@ fun AppShell(app: App) {
         pendingCount = app.db.messageDao().pendingCount()
     }
 
-    BackHandler(enabled = current != Screen.Home) {
+    BackHandler(enabled = current != Screen.Home && current != Screen.EmailSetup) {
         current = if (current == Screen.Settings) previousTab else Screen.Home
     }
 
@@ -119,6 +121,7 @@ fun AppShell(app: App) {
         Screen.Send -> stringResource(R.string.nav_send)
         Screen.PipelineInbox -> stringResource(R.string.nav_pipeline)
         Screen.Settings -> stringResource(R.string.nav_settings)
+        Screen.EmailSetup -> "ورود و تنظیم ایمیل"
     }
 
     Scaffold(
@@ -140,7 +143,7 @@ fun AppShell(app: App) {
                     }
                 },
                 navigationIcon = {
-                    if (current == Screen.Settings) {
+                    if (current == Screen.Settings || (current == Screen.EmailSetup && !firstRunSetup)) {
                         IconButton(
                             onClick = { current = previousTab },
                             modifier = Modifier.testTag("settings_back_button")
@@ -153,7 +156,7 @@ fun AppShell(app: App) {
                     }
                 },
                 actions = {
-                    if (current != Screen.Settings) {
+                    if (current != Screen.Settings && current != Screen.EmailSetup) {
                         IconButton(
                             onClick = { navigate(Screen.Settings) },
                             modifier = Modifier.testTag("open_settings_button")
@@ -172,7 +175,7 @@ fun AppShell(app: App) {
             )
         },
         bottomBar = {
-            if (current != Screen.Settings) {
+            if (current != Screen.Settings && current != Screen.EmailSetup) {
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,
                     tonalElevation = 4.dp
@@ -247,7 +250,16 @@ fun AppShell(app: App) {
                 )
                 Screen.Send -> SendScreen(app = app, onOpenSettings = { navigate(Screen.Settings) })
                 Screen.PipelineInbox -> PipelineInboxScreen(app = app, onOpenSettings = { navigate(Screen.Settings) })
-                Screen.Settings -> SettingsScreen(app = app, onBack = { current = previousTab })
+                Screen.Settings -> SettingsScreen(
+                    app = app,
+                    onBack = { current = previousTab },
+                    onOpenEmailSetup = { navigate(Screen.EmailSetup) }
+                )
+                Screen.EmailSetup -> EmailSetupWizard(
+                    app = app,
+                    isFirstRun = firstRunSetup,
+                    onDone = { current = Screen.Home }
+                )
             }
         }
     }

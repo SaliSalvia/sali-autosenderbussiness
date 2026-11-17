@@ -49,7 +49,13 @@ data class MessageEntity(
     /** Worker lease so a killed process never re-sends an in-flight message. */
     val leaseOwner: String? = null,
     val leaseUntil: Long? = null,
-    val updatedAt: Long? = null
+    val updatedAt: Long? = null,
+    /** Provider RFC Message-ID or Brevo messageId for threaded follow-ups & tracking. */
+    val providerMessageId: String? = null,
+    /** Style code (BUSINESS/TECHNICAL/DIRECT) for conversion analytics. */
+    val styleUsed: String = "",
+    /** hcnsec model that generated this message. */
+    val modelUsed: String = ""
 )
 
 @Entity(tableName = "logs")
@@ -69,6 +75,34 @@ data class CampaignEntity(
     @PrimaryKey val id: String = "active",
     val payload: String = "",
     val updatedAt: Long = 0L
+)
+
+/** Persistent You.com public company research cache so domain intelligence survives app restarts. */
+@Entity(tableName = "company_cache")
+data class CompanyCacheEntity(
+    @PrimaryKey val domain: String,
+    val summary: String,
+    val sourcesJson: String = "[]",
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+/** Persistent studio draft per recipient so generated emails never get lost on process death. */
+@Entity(tableName = "studio_drafts")
+data class StudioDraftEntity(
+    @PrimaryKey val key: String,
+    val domain: String,
+    val email: String,
+    val name: String? = null,
+    val style: String = "BUSINESS",
+    val subject: String = "",
+    val preheader: String = "",
+    val body: String = "",
+    val subjectAltsJson: String = "[]",
+    val generated: Boolean = false,
+    val approved: Boolean = false,
+    val messageUuid: String? = null,
+    val modelUsed: String = "",
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Dao
@@ -94,10 +128,6 @@ interface MessageDao {
     )
     suspend fun claim(id: Long, owner: String, until: Long, now: Long): Int
 
-    /**
-     * A lease expiry does not prove that the provider rejected the email.
-     * Preserve at-most-once behavior by requiring human review.
-     */
     @Query(
         "UPDATE messages SET status = 'UNCERTAIN', leaseOwner = NULL, leaseUntil = NULL, " +
             "lastError = :reason, updatedAt = :now " +
@@ -121,6 +151,9 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE messageUuid = :uuid LIMIT 1")
     suspend fun byUuid(uuid: String): MessageEntity?
+
+    @Query("SELECT * FROM messages WHERE LOWER(email) = LOWER(:email) ORDER BY id DESC")
+    suspend fun byEmail(email: String): List<MessageEntity>
 
     @Insert suspend fun insert(m: MessageEntity): Long
     @Update suspend fun update(m: MessageEntity)
@@ -149,15 +182,51 @@ interface CampaignDao {
     @Query("DELETE FROM campaigns") suspend fun clearAll()
 }
 
+@Dao
+interface CompanyCacheDao {
+    @Query("SELECT * FROM company_cache WHERE LOWER(domain) = LOWER(:domain) LIMIT 1")
+    suspend fun get(domain: String): CompanyCacheEntity?
+
+    @Upsert suspend fun upsert(c: CompanyCacheEntity)
+
+    @Query("DELETE FROM company_cache WHERE LOWER(domain) = LOWER(:domain)")
+    suspend fun delete(domain: String)
+
+    @Query("DELETE FROM company_cache")
+    suspend fun clearAll()
+}
+
+@Dao
+interface StudioDraftDao {
+    @Query("SELECT * FROM studio_drafts")
+    suspend fun all(): List<StudioDraftEntity>
+
+    @Upsert suspend fun upsert(d: StudioDraftEntity)
+
+    @Query("DELETE FROM studio_drafts WHERE `key` = :key")
+    suspend fun deleteByKey(key: String)
+
+    @Query("DELETE FROM studio_drafts")
+    suspend fun clearAll()
+}
+
 @Database(
-    entities = [MessageEntity::class, LogEntity::class, CampaignEntity::class],
-    version = 4,
+    entities = [
+        MessageEntity::class,
+        LogEntity::class,
+        CampaignEntity::class,
+        CompanyCacheEntity::class,
+        StudioDraftEntity::class
+    ],
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
     abstract fun logDao(): LogDao
     abstract fun campaignDao(): CampaignDao
+    abstract fun companyCacheDao(): CompanyCacheDao
+    abstract fun studioDraftDao(): StudioDraftDao
 }
 
 val MIGRATION_2_3 = object : Migration(2, 3) {
@@ -179,5 +248,26 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
 val MIGRATION_3_4 = object : Migration(3, 4) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE messages ADD COLUMN attachmentSha256 TEXT")
+    }
+}
+
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE messages ADD COLUMN providerMessageId TEXT")
+        db.execSQL("ALTER TABLE messages ADD COLUMN styleUsed TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE messages ADD COLUMN modelUsed TEXT NOT NULL DEFAULT ''")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `company_cache` (" +
+                "`domain` TEXT NOT NULL, `summary` TEXT NOT NULL, `sourcesJson` TEXT NOT NULL DEFAULT '[]', " +
+                "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`domain`))"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `studio_drafts` (" +
+                "`key` TEXT NOT NULL, `domain` TEXT NOT NULL, `email` TEXT NOT NULL, `name` TEXT, " +
+                "`style` TEXT NOT NULL, `subject` TEXT NOT NULL, `preheader` TEXT NOT NULL, " +
+                "`body` TEXT NOT NULL, `subjectAltsJson` TEXT NOT NULL, `generated` INTEGER NOT NULL, " +
+                "`approved` INTEGER NOT NULL, `messageUuid` TEXT, `modelUsed` TEXT NOT NULL, " +
+                "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`key`))"
+        )
     }
 }

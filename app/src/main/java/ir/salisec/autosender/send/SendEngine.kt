@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -51,6 +52,7 @@ data class SendState(
  *  - one stable UUID per message (provider-side idempotency),
  *  - UNCERTAIN instead of auto-retry when a response is lost,
  *  - a defence-in-depth check on opt-out, grounding and real PDF bytes,
+ *  - providerMessageId persistence for follow-up threading,
  *  - PII-free logs and errors.
  */
 class SendEngine(
@@ -86,6 +88,45 @@ class SendEngine(
             }
             val today = db.messageDao().sentSince(startOfDay())
             _state.value = _state.value.copy(logs = recent, sentToday = today)
+        }
+    }
+
+    /** Sends a preview copy of a draft (plus up to 2 PDF attachments) to the user's OWN email. */
+    suspend fun sendTestToSelf(
+        subject: String,
+        preheader: String,
+        body: String,
+        attachmentUris: List<String>,
+        attachmentNames: List<String>
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val settings = prefs.load()
+        if (settings.fromEmail.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("ایمیل فرستنده در تنظیمات وارد نشده است"))
+        }
+        val sender = if (settings.sendMode == "BREVO_API") brevo else smtp
+        val perFileCap = minOf(
+            AttachmentGuard.MAX_PER_FILE_BYTES,
+            settings.maxAttachmentMb.coerceIn(1, 4) * 1024L * 1024L
+        )
+        try {
+            val attachments = attachmentUris.mapIndexed { i, uri ->
+                val bytes = readBounded(appContext, uri, perFileCap)
+                val name = attachmentNames.getOrNull(i) ?: AttachmentPolicy.displayName(uri)
+                name to bytes
+            }
+            val msg = OutgoingMessage(
+                to = settings.fromEmail.trim(),
+                subject = "[تست پیش‌نمایش] $subject",
+                htmlBody = body,
+                textBody = body,
+                preheader = preheader,
+                attachments = attachments,
+                idempotencyKey = UUID.randomUUID().toString()
+            )
+            sender.send(settings, msg)
+            Result.success("ایمیل تست با ${attachments.size} پیوست به ${settings.fromEmail} ارسال شد ✓")
+        } catch (e: Exception) {
+            Result.failure(RuntimeException(PrivacyRedactor.safeError(e)))
         }
     }
 
@@ -238,6 +279,13 @@ class SendEngine(
                     db.messageDao().update(msg.copy(messageUuid = uuid))
                 }
 
+                // Look up parent Message-ID for clean email threading on follow-ups
+                val parentId = if (msg.isFollowUp) {
+                    db.messageDao().byEmail(msg.email)
+                        .firstOrNull { !it.isFollowUp && !it.providerMessageId.isNullOrBlank() }
+                        ?.providerMessageId
+                } else null
+
                 _state.value = _state.value.copy(currentDomain = msg.domain)
                 val out = OutgoingMessage(
                     to = msg.email,
@@ -246,14 +294,23 @@ class SendEngine(
                     textBody = msg.body,
                     preheader = msg.preheader,
                     attachments = attachments,
-                    idempotencyKey = uuid
+                    idempotencyKey = uuid,
+                    inReplyToMessageId = parentId,
+                    references = parentId
                 )
 
                 val attempts = msg.attempts + 1
                 try {
                     val sender = if (settings.sendMode == "BREVO_API") brevo else smtp
-                    sender.send(settings, out)
-                    settle(msg, MessageState.SENT, null, sent = true, attempts = attempts)
+                    val receipt = sender.send(settings, out)
+                    settle(
+                        msg,
+                        MessageState.SENT,
+                        null,
+                        sent = true,
+                        attempts = attempts,
+                        providerMessageId = receipt.providerMessageId
+                    )
                     sent++
                     sentToday++
                     _state.value = _state.value.copy(sent = sent, sentToday = sentToday)
@@ -305,7 +362,8 @@ class SendEngine(
         status: String,
         error: String? = null,
         sent: Boolean = false,
-        attempts: Int = m.attempts
+        attempts: Int = m.attempts,
+        providerMessageId: String? = m.providerMessageId
     ) {
         db.messageDao().update(
             m.copy(
@@ -315,6 +373,7 @@ class SendEngine(
                 attempts = attempts,
                 leaseOwner = null,
                 leaseUntil = null,
+                providerMessageId = providerMessageId ?: m.providerMessageId,
                 updatedAt = System.currentTimeMillis()
             )
         )

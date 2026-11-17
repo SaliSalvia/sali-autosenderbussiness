@@ -7,7 +7,10 @@ data class AiResult(
     val body: String = "",
     val subjectAlternatives: List<String> = emptyList(),
     val cta: String = "",
-    val quality: QualityReport = QualityReport()
+    val quality: QualityReport = QualityReport(),
+    val modelUsed: String = "",
+    val promptTokens: Int = 0,
+    val completionTokens: Int = 0
 )
 
 /** Local, deterministic grounding + compliance gate (no AI needed, no credits spent). */

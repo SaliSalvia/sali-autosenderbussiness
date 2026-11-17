@@ -57,7 +57,10 @@ data class OutgoingMessage(
     val attachments: List<Pair<String, ByteArray>> = emptyList(),
     /** Stable UUID. Brevo keeps it for 30 minutes and rejects a duplicate
      *  with `duplicate_parameter`; SMTP uses it as a deterministic Message-ID. */
-    val idempotencyKey: String = ""
+    val idempotencyKey: String = "",
+    /** RFC Message-ID of parent email when sending a threaded follow-up or reply. */
+    val inReplyToMessageId: String? = null,
+    val references: String? = null
 )
 
 /** Page counts recorded at approval time, re-checked before every send. */

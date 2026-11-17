@@ -25,8 +25,10 @@ import javax.mail.internet.MimeBodyPart
 import javax.mail.internet.MimeMessage
 import javax.mail.internet.MimeMultipart
 
+data class SendReceipt(val providerMessageId: String? = null)
+
 interface MailSender {
-    suspend fun send(s: Settings, msg: OutgoingMessage)
+    suspend fun send(s: Settings, msg: OutgoingMessage): SendReceipt
 }
 
 /** Brevo already processed this exact idempotency key. NOT an error to retry. */
@@ -45,24 +47,29 @@ private fun looksAmbiguous(text: String?): Boolean {
     ).any { t.contains(it) }
 }
 
-/** Brevo transactional HTTPS API - the recommended sender.
- *  No fake headers, no spoofing: sender/replyTo are the user's real identity.
- *  A stable `headers.idempotencyKey` (UUID) makes retries duplicate-safe. */
+/** Brevo transactional HTTPS API sender with idempotency, threading & List-Unsubscribe headers. */
 class BrevoSender(private val client: OkHttpClient) : MailSender {
-    override suspend fun send(s: Settings, msg: OutgoingMessage) = withContext(Dispatchers.IO) {
+    override suspend fun send(s: Settings, msg: OutgoingMessage): SendReceipt = withContext(Dispatchers.IO) {
+        val replyAddr = s.replyTo.ifBlank { s.fromEmail }
+        val headersObj = JSONObject()
+        if (msg.idempotencyKey.isNotBlank()) {
+            headersObj.put("idempotencyKey", msg.idempotencyKey)
+        }
+        headersObj.put("List-Unsubscribe", "<mailto:$replyAddr?subject=unsubscribe>")
+        headersObj.put("List-Unsubscribe-Post", "List-Unsubscribe=One-Click")
+        msg.inReplyToMessageId?.takeIf { it.isNotBlank() }?.let {
+            headersObj.put("In-Reply-To", it)
+            headersObj.put("References", msg.references?.takeIf { r -> r.isNotBlank() } ?: it)
+        }
+
         val o = JSONObject()
             .put("sender", JSONObject().put("name", s.fromName).put("email", s.fromEmail))
             .put("to", JSONArray().put(JSONObject().put("email", msg.to)))
             .put("subject", msg.subject)
-            .put("htmlContent", html(msg))
+            .put("htmlContent", buildHtmlEmail(msg))
             .put("textContent", msg.textBody)
-            .put("replyTo", JSONObject().put("email", s.replyTo.ifBlank { s.fromEmail }))
-
-        // Brevo's documented idempotency: a UUID in the `headers` object,
-        // remembered for 30 minutes. A repeat returns 400 duplicate_parameter.
-        if (msg.idempotencyKey.isNotBlank()) {
-            o.put("headers", JSONObject().put("idempotencyKey", msg.idempotencyKey))
-        }
+            .put("replyTo", JSONObject().put("email", replyAddr))
+            .put("headers", headersObj)
 
         if (msg.attachments.isNotEmpty()) {
             val arr = JSONArray()
@@ -92,64 +99,98 @@ class BrevoSender(private val client: OkHttpClient) : MailSender {
                     if (resp.code >= 500) throw AmbiguousSendException("Brevo ${resp.code}: $clean")
                     throw RuntimeException("Brevo ${resp.code}: $clean")
                 }
+                val msgId = try {
+                    JSONObject(body).optString("messageId", "").takeIf { it.isNotBlank() }
+                } catch (_: Exception) { null }
+                SendReceipt(msgId)
             }
         } catch (e: DuplicateSendException) {
             throw e
         } catch (e: AmbiguousSendException) {
             throw e
         } catch (e: IOException) {
-            // Timeout / reset / DNS: the server may already have accepted the send.
             throw AmbiguousSendException(PrivacyRedactor.redact(e.message))
         }
     }
 }
 
-/** Plain SMTP sender (custom domain, STARTTLS). SMTP has no server-side
- *  idempotency, so the same UUID becomes a deterministic RFC Message-ID and
- *  ambiguous failures are never auto-retried. */
+/** Standard SMTP / SMTPS sender (supports both port 465 SSL & port 587 STARTTLS, MIME HTML+Text, threading, List-Unsubscribe). */
 class SmtpSender : MailSender {
-    override suspend fun send(s: Settings, msg: OutgoingMessage) = withContext(Dispatchers.IO) {
+    override suspend fun send(s: Settings, msg: OutgoingMessage): SendReceipt = withContext(Dispatchers.IO) {
+        val useSsl = s.smtpSecurity == "SSL" || s.smtpPort == 465
         val props = Properties().apply {
-            put("mail.smtp.host", s.smtpHost)
-            put("mail.smtp.port", s.smtpPort.toString())
-            put("mail.smtp.auth", "true")
-            put("mail.smtp.starttls.enable", "true")
-            put("mail.smtp.starttls.required", "true")
-            put("mail.smtp.ssl.checkserveridentity", "true")
-            put("mail.smtp.connectiontimeout", "30000")
-            put("mail.smtp.timeout", "60000")
+            if (useSsl) {
+                put("mail.smtps.host", s.smtpHost)
+                put("mail.smtps.port", s.smtpPort.toString())
+                put("mail.smtps.auth", "true")
+                put("mail.smtps.ssl.enable", "true")
+                put("mail.smtps.ssl.checkserveridentity", "true")
+                put("mail.smtps.connectiontimeout", "30000")
+                put("mail.smtps.timeout", "60000")
+            } else {
+                put("mail.smtp.host", s.smtpHost)
+                put("mail.smtp.port", s.smtpPort.toString())
+                put("mail.smtp.auth", "true")
+                put("mail.smtp.starttls.enable", "true")
+                put("mail.smtp.starttls.required", "true")
+                put("mail.smtp.ssl.checkserveridentity", "true")
+                put("mail.smtp.connectiontimeout", "30000")
+                put("mail.smtp.timeout", "60000")
+            }
         }
         val session = Session.getInstance(props, object : Authenticator() {
             override fun getPasswordAuthentication() = PasswordAuthentication(s.smtpUser, s.smtpPass)
         })
+        val domainPart = s.fromEmail.substringAfter('@', "salisec.ir").ifBlank { "salisec.ir" }
+        val rfcMsgId = if (msg.idempotencyKey.isNotBlank()) "<${msg.idempotencyKey}@$domainPart>" else null
+
         val mm = MimeMessage(session)
         mm.setFrom(InternetAddress(s.fromEmail, s.fromName, "UTF-8"))
         mm.setRecipient(Message.RecipientType.TO, InternetAddress(msg.to))
         mm.subject = msg.subject
-        mm.replyTo = arrayOf(InternetAddress(s.replyTo.ifBlank { s.fromEmail }))
+        val replyAddr = s.replyTo.ifBlank { s.fromEmail }
+        mm.replyTo = arrayOf(InternetAddress(replyAddr))
         mm.sentDate = Date()
-        if (msg.idempotencyKey.isNotBlank()) {
-            mm.setHeader("Message-ID", "<${msg.idempotencyKey}@salisec.ir>")
+        if (rfcMsgId != null) {
+            mm.setHeader("Message-ID", rfcMsgId)
+        }
+        mm.setHeader("List-Unsubscribe", "<mailto:$replyAddr?subject=unsubscribe>")
+        mm.setHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click")
+        msg.inReplyToMessageId?.takeIf { it.isNotBlank() }?.let {
+            mm.setHeader("In-Reply-To", it)
+            mm.setHeader("References", msg.references?.takeIf { r -> r.isNotBlank() } ?: it)
         }
 
+        // multipart/alternative (plain + clean RTL HTML) inside multipart/mixed when PDFs exist
+        val alternative = MimeMultipart("alternative")
+        val textPart = MimeBodyPart().apply { setText(msg.textBody, "UTF-8") }
+        val htmlPart = MimeBodyPart().apply { setContent(buildHtmlEmail(msg), "text/html; charset=UTF-8") }
+        alternative.addBodyPart(textPart)
+        alternative.addBodyPart(htmlPart)
+
         if (msg.attachments.isEmpty()) {
-            mm.setText(msg.textBody, "UTF-8")
+            mm.setContent(alternative)
         } else {
-            val mp = MimeMultipart()
-            val bp = MimeBodyPart()
-            bp.setText(msg.textBody, "UTF-8")
-            mp.addBodyPart(bp)
+            val mixed = MimeMultipart("mixed")
+            val bodyWrapper = MimeBodyPart().apply { setContent(alternative) }
+            mixed.addBodyPart(bodyWrapper)
             for ((name, bytes) in msg.attachments) {
                 val ap = MimeBodyPart()
                 val fds = javax.mail.util.ByteArrayDataSource(bytes, "application/pdf")
                 ap.dataHandler = javax.activation.DataHandler(fds)
                 ap.fileName = name
-                mp.addBodyPart(ap)
+                mixed.addBodyPart(ap)
             }
-            mm.setContent(mp)
+            mm.setContent(mixed)
         }
+
         try {
-            Transport.send(mm)
+            val proto = if (useSsl) "smtps" else "smtp"
+            val transport = session.getTransport(proto)
+            transport.connect(s.smtpHost, s.smtpPort, s.smtpUser, s.smtpPass)
+            transport.sendMessage(mm, mm.allRecipients)
+            transport.close()
+            SendReceipt(rfcMsgId)
         } catch (e: Exception) {
             if (looksAmbiguous(e.message)) {
                 throw AmbiguousSendException(PrivacyRedactor.redact(e.message))
@@ -159,13 +200,13 @@ class SmtpSender : MailSender {
     }
 }
 
-/** Hidden preheader + properly escaped RTL-friendly HTML. */
-private fun html(msg: OutgoingMessage): String {
+/** Clean RTL B2B HTML email with hidden preheader and crisp readability on desktop & mobile. */
+private fun buildHtmlEmail(msg: OutgoingMessage): String {
     val pre = if (msg.preheader.isBlank()) "" else
-        "<div style='display:none;max-height:0;overflow:hidden;opacity:0;font-size:1px'>" +
+        "<div style='display:none;max-height:0;overflow:hidden;opacity:0;font-size:1px;color:#ffffff'>" +
             escapeHtml(msg.preheader) + "</div>"
     val body = escapeHtml(msg.textBody).replace("\n", "<br>")
-    return "<div dir='rtl' style='font-family:Tahoma,Arial,sans-serif;font-size:14px;line-height:1.9'>" +
+    return "<div dir='rtl' style=\"font-family:Vazirmatn,Tahoma,Arial,sans-serif;font-size:14.5px;line-height:1.95;color:#1F2937;max-width:640px;margin:0 auto;padding:8px 4px\">" +
         pre + body + "</div>"
 }
 

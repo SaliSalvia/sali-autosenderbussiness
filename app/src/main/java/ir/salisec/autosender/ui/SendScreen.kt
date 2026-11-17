@@ -15,12 +15,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Outbox
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -41,9 +46,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,6 +59,8 @@ import ir.salisec.autosender.App
 import ir.salisec.autosender.R
 import ir.salisec.autosender.data.MessageEntity
 import ir.salisec.autosender.data.PrivacyRedactor
+import ir.salisec.autosender.mail.CheckSeverity
+import ir.salisec.autosender.mail.DeliverabilityReport
 import ir.salisec.autosender.send.MessageState
 import ir.salisec.autosender.send.SendService
 import kotlinx.coroutines.delay
@@ -63,15 +72,36 @@ import java.util.Locale
 @Composable
 fun SendScreen(app: App, onOpenSettings: () -> Unit) {
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val state by app.engine.state.collectAsState()
+    val deliverability by app.session.deliverability.collectAsState()
     var queue by remember { mutableStateOf(listOf<MessageEntity>()) }
     var showSendConfirm by remember { mutableStateOf(false) }
     var nowTick by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var checkingDns by remember { mutableStateOf(false) }
+    var copiedRecordNotice by remember { mutableStateOf<String?>(null) }
 
     val settings = remember(state.running) { app.prefs.load() }
-    val senderConfigured = settings.fromEmail.isNotBlank() &&
-        (if (settings.sendMode == "BREVO_API") settings.brevoKey.isNotBlank() else settings.smtpHost.isNotBlank())
+    val senderConfigured = settings.hasOutgoingConfigured()
+
+    fun runDeliverabilityChecks() {
+        scope.launch {
+            checkingDns = true
+            copiedRecordNotice = null
+            val currentSettings = app.prefs.load()
+            val pendingItems = app.db.messageDao().all().filter {
+                it.status == MessageState.APPROVED || it.status == MessageState.QUEUED
+            }
+            val report = app.deliverability.runAllChecks(
+                s = currentSettings,
+                queuedMessages = pendingItems,
+                testTransportLive = currentSettings.hasOutgoingConfigured()
+            )
+            app.session.deliverability.value = report
+            checkingDns = false
+        }
+    }
 
     fun reload() {
         scope.launch {
@@ -87,6 +117,7 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
     LaunchedEffect(Unit) {
         app.engine.refreshLogs()
         reload()
+        runDeliverabilityChecks()
     }
     LaunchedEffect(state.sent, state.failed, state.skipped, state.running) { reload() }
 
@@ -130,6 +161,18 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
         }
 
         state.errorNotice?.let { Chip(it, RedErr, onClick = onOpenSettings) }
+
+        // PRE-FLIGHT EMAIL ANTI-SPAM & DELIVERABILITY VALIDATION CARD (SPF, DKIM, DMARC, MX, Auth)
+        DeliverabilityChecklistCard(
+            report = deliverability,
+            checking = checkingDns,
+            copiedNotice = copiedRecordNotice,
+            onCopyRecord = { rec ->
+                clipboard.setText(AnnotatedString(rec))
+                copiedRecordNotice = "رکورد DNS کپی شد؛ در پنل دامنه ثبت کرده و دکمه «چک مجدد» را بزنید."
+            },
+            onRecheck = { runDeliverabilityChecks() }
+        )
 
         Section(
             header = stringResource(R.string.send_status),
@@ -181,7 +224,7 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
                 BigButton(
                     text = if (pending > 0) stringResource(R.string.send_bulk) + " ($pending)"
                     else stringResource(R.string.send_bulk_empty),
-                    enabled = pending > 0,
+                    enabled = pending > 0 && !checkingDns,
                     icon = Icons.Default.Send,
                     modifier = Modifier.testTag("send_start_button")
                 ) {
@@ -283,17 +326,25 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
     }
 
     if (showSendConfirm) {
+        val dr = deliverability
+        val warnBody = buildString {
+            append(stringResource(R.string.send_confirm_body)).append(" ($pending)")
+            if (dr != null && dr.hasCriticalFailure) {
+                append("\n\n⚠️ هشدار مهم ضداسپم: ").append(dr.failCount)
+                    .append(" مشکل بحرانی (SPF / DKIM / DMARC / اتصال) هنوز حل نشده است! ارسال قبل از رفع آنها احتمال ورود ایمیل به پوشه Spam را بالا می‌برد.")
+            }
+        }
         AlertDialog(
             onDismissRequest = { showSendConfirm = false },
             title = { Text(stringResource(R.string.send_confirm_title)) },
-            text = { Text(stringResource(R.string.send_confirm_body) + " ($pending)") },
+            text = { Text(warnBody) },
             confirmButton = {
                 Button(onClick = {
                     showSendConfirm = false
                     ContextCompat.startForegroundService(
                         context, Intent(context, SendService::class.java)
                     )
-                }) { Text(stringResource(R.string.send_confirm_ok)) }
+                }) { Text(if (dr?.hasCriticalFailure == true) "ارسال با مسئولیت خودم" else stringResource(R.string.send_confirm_ok)) }
             },
             dismissButton = {
                 TextButton(onClick = { showSendConfirm = false }) {
@@ -301,6 +352,126 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun DeliverabilityChecklistCard(
+    report: DeliverabilityReport?,
+    checking: Boolean,
+    copiedNotice: String?,
+    onCopyRecord: (String) -> Unit,
+    onRecheck: () -> Unit
+) {
+    val badgeText = when {
+        checking -> "در حال بررسی..."
+        report == null -> "بررسی نشده"
+        report.isClean -> "همه موارد سالم ✓"
+        report.hasCriticalFailure -> "${report.failCount} خطا • ${report.warnCount} هشدار"
+        else -> "${report.warnCount} هشدار جزئی"
+    }
+    val badgeColor = when {
+        checking -> MaterialTheme.colorScheme.primary
+        report == null -> OrangeWarn
+        report.isClean -> GreenOk
+        report.hasCriticalFailure -> RedErr
+        else -> OrangeWarn
+    }
+
+    Section(
+        header = "سلامت ضداسپم و اعتبارسنجی (SPF • DKIM • DMARC • MX)",
+        icon = Icons.Default.Security,
+        badge = badgeText,
+        badgeColor = badgeColor
+    ) {
+        if (checking) {
+            LoadingBox("در حال استعلام زنده رکوردهای DNS (SPF، DKIM، DMARC، MX) و تست اتصال...")
+        } else if (report != null) {
+            if (report.isClean) {
+                Chip("دامنه ${report.senderDomain} برای ارسال با کمترین ریسک اسپم کاملاً تأیید شد ✓", GreenOk)
+            } else if (report.hasCriticalFailure) {
+                Chip("هشدار: مشکلات بحرانی پایین را در پنل DNS / تنظیمات برطرف کرده و «چک مجدد» بزنید.", RedErr)
+            }
+
+            copiedNotice?.let { Chip(it, GreenOk) }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                report.items.forEach { item ->
+                    val itemColor = when (item.severity) {
+                        CheckSeverity.PASS -> GreenOk
+                        CheckSeverity.WARNING -> OrangeWarn
+                        CheckSeverity.FAIL -> RedErr
+                    }
+                    val itemIcon = when (item.severity) {
+                        CheckSeverity.PASS -> Icons.Default.CheckCircle
+                        CheckSeverity.WARNING -> Icons.Default.Warning
+                        CheckSeverity.FAIL -> Icons.Default.Error
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = itemColor.copy(alpha = 0.08f),
+                        border = BorderStroke(1.dp, itemColor.copy(alpha = 0.30f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(itemIcon, contentDescription = null, tint = itemColor, modifier = Modifier.size(16.dp))
+                                Text(
+                                    item.title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = itemColor
+                                )
+                            }
+                            Text(item.detail, style = MaterialTheme.typography.bodySmall)
+                            if (item.remediation.isNotBlank()) {
+                                SubTitle("راهکار: ${item.remediation}", color = itemColor)
+                            }
+                            if (item.suggestedRecord.isNotBlank()) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            item.suggestedRecord,
+                                            fontSize = 11.sp,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        TextButton(onClick = { onCopyRecord(item.suggestedRecord) }) {
+                                            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("کپی")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Prominent recheck button at the bottom of the validation section as requested
+        BigButton(
+            text = if (checking) "در حال بررسی مجدد..." else "چک مجدد و تأیید رفع مشکلات",
+            loading = checking,
+            icon = Icons.Default.Refresh,
+            modifier = Modifier.testTag("deliverability_recheck_button")
+        ) {
+            onRecheck()
+        }
     }
 }
 

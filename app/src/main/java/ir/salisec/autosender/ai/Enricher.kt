@@ -1,5 +1,7 @@
 package ir.salisec.autosender.ai
 
+import ir.salisec.autosender.data.CompanyCacheDao
+import ir.salisec.autosender.data.CompanyCacheEntity
 import ir.salisec.autosender.data.CompanyContext
 import ir.salisec.autosender.data.Settings
 import kotlinx.coroutines.Dispatchers
@@ -15,14 +17,18 @@ import java.util.concurrent.TimeUnit
 
 /** You.com Search API enrichment: PUBLIC, COMPANY-LEVEL context only.
  *
- *  - One request per domain (cached in memory when successful)
- *  - Supports bilingual Persian + English business context queries
+ *  - Two-tier cache: in-memory + Room (`company_cache`, 7-day TTL)
+ *  - Bilingual Persian + English company/product queries for maximum relevance
  *  - Never caches transient errors; degrades gracefully */
-class Enricher(private val client: OkHttpClient) {
+class Enricher(
+    private val client: OkHttpClient,
+    private val cacheDao: CompanyCacheDao? = null
+) {
 
     private val cache = ConcurrentHashMap<String, CompanyContext>()
     private val emailR = Regex("""[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}""")
     private val phoneR = Regex("""\+?[0-9][0-9 ().\-]{7,}[0-9]""")
+    private val ttlMs = 7L * 24L * 60L * 60L * 1000L
 
     fun clearCache() {
         cache.clear()
@@ -57,15 +63,36 @@ class Enricher(private val client: OkHttpClient) {
         }
     }
 
-    suspend fun enrich(s: Settings, domain: String): CompanyContext = withContext(Dispatchers.IO) {
+    suspend fun enrich(
+        s: Settings,
+        domain: String,
+        forceRefresh: Boolean = false
+    ): CompanyContext = withContext(Dispatchers.IO) {
         val cleanDomain = domain.trim().lowercase()
-        cache[cleanDomain]?.takeIf { it.summary.isNotBlank() }?.let { return@withContext it }
+        if (!forceRefresh) {
+            cache[cleanDomain]?.takeIf { it.summary.isNotBlank() }?.let { return@withContext it }
+            val persisted = try {
+                cacheDao?.get(cleanDomain)
+            } catch (_: Exception) { null }
+            if (persisted != null && persisted.summary.isNotBlank() &&
+                (System.currentTimeMillis() - persisted.updatedAt) < ttlMs
+            ) {
+                val sources = try {
+                    val arr = JSONArray(persisted.sourcesJson)
+                    (0 until arr.length()).mapNotNull { arr.optString(it).takeIf { s2 -> s2.isNotBlank() } }
+                } catch (_: Exception) { emptyList() }
+                return@withContext CompanyContext(cleanDomain, persisted.summary, sources).also {
+                    cache[cleanDomain] = it
+                }
+            }
+        }
+
         if (s.youKey.isBlank() || s.youEndpoint.isBlank()) {
             return@withContext CompanyContext(cleanDomain, "")
         }
 
-        // First try targeted bilingual business query; fallback to clean domain query if empty
-        val primaryQuery = "\"$cleanDomain\" (about OR services OR products OR company OR درباره OR خدمات OR محصولات)"
+        // Targeted bilingual business & offerings search
+        val primaryQuery = "\"$cleanDomain\" (about OR services OR products OR customers OR درباره OR خدمات OR محصولات OR فروش)"
         val first = runSearch(s, primaryQuery)
         val finalPair = if (first != null && first.first.isNotBlank()) {
             first
@@ -74,8 +101,13 @@ class Enricher(private val client: OkHttpClient) {
         }
 
         val ctx = if (finalPair != null && finalPair.first.isNotBlank()) {
-            CompanyContext(cleanDomain, sanitize(finalPair.first).take(900), finalPair.second).also {
-                cache[cleanDomain] = it
+            val cleanSummary = sanitize(finalPair.first).take(1500)
+            CompanyContext(cleanDomain, cleanSummary, finalPair.second).also { res ->
+                cache[cleanDomain] = res
+                try {
+                    val srcJson = JSONArray().apply { res.sources.forEach { put(it) } }.toString()
+                    cacheDao?.upsert(CompanyCacheEntity(cleanDomain, res.summary, srcJson, System.currentTimeMillis()))
+                } catch (_: Exception) { }
             }
         } else {
             CompanyContext(cleanDomain, "")
@@ -132,8 +164,8 @@ class Enricher(private val client: OkHttpClient) {
                 // leave empty
             }
         }
-        return chunks.distinct().filter { it.length > 20 }.take(4).joinToString(" | ") to
-            sources.distinct().take(3)
+        return chunks.distinct().filter { it.length > 20 }.take(6).joinToString(" | ") to
+            sources.distinct().take(4)
     }
 
     private fun collectStrings(o: JSONObject, out: MutableList<String>, depth: Int) {
