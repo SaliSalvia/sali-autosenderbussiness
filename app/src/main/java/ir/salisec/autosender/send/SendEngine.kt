@@ -41,6 +41,7 @@ data class SendState(
     val sentToday: Int = 0,
     val currentDomain: String? = null,
     val waitingUntil: Long? = null,
+    val errorNotice: String? = null,
     val logs: List<LogEntry> = emptyList()
 )
 
@@ -49,7 +50,7 @@ data class SendState(
  *  - an atomic claim/lease (a killed worker cannot re-send an in-flight item),
  *  - one stable UUID per message (provider-side idempotency),
  *  - UNCERTAIN instead of auto-retry when a response is lost,
- *  - a final defence-in-depth check on opt-out, grounding and real PDF bytes,
+ *  - a defence-in-depth check on opt-out, grounding and real PDF bytes,
  *  - PII-free logs and errors.
  */
 class SendEngine(
@@ -74,10 +75,42 @@ class SendEngine(
     private val brevo = BrevoSender(ok)
     private val smtp = SmtpSender()
 
+    init {
+        refreshLogs()
+    }
+
+    fun refreshLogs() {
+        scope.launch {
+            val recent = db.logDao().recent().map {
+                LogEntry(it.ts, it.domain, it.email, it.ok, it.message)
+            }
+            val today = db.messageDao().sentSince(startOfDay())
+            _state.value = _state.value.copy(logs = recent, sentToday = today)
+        }
+    }
+
     fun start() {
         if (job?.isActive == true) return
         cancelRequested = false
         job = scope.launch {
+            val initialSettings = prefs.load()
+            val configProblem = when {
+                initialSettings.fromEmail.isBlank() -> "ایمیل فرستنده در تنظیمات وارد نشده است"
+                initialSettings.sendMode == "BREVO_API" && initialSettings.brevoKey.isBlank() ->
+                    "کلید Brevo API در تنظیمات وارد نشده است"
+                initialSettings.sendMode == "SMTP" &&
+                    (initialSettings.smtpHost.isBlank() || initialSettings.smtpUser.isBlank() || initialSettings.smtpPass.isBlank()) ->
+                    "تنظیمات SMTP در تنظیمات کامل نیست"
+                else -> null
+            }
+            if (configProblem != null) {
+                _state.value = _state.value.copy(
+                    running = false,
+                    errorNotice = configProblem
+                )
+                return@launch
+            }
+
             val now0 = System.currentTimeMillis()
             db.messageDao().markStuckUncertain(
                 now0,
@@ -90,14 +123,12 @@ class SendEngine(
             val pending = db.messageDao().pendingCount()
             _state.value = _state.value.copy(
                 running = true, paused = false, total = pending,
-                sent = 0, failed = 0, skipped = 0, sentToday = sentToday
+                sent = 0, failed = 0, skipped = 0, sentToday = sentToday,
+                errorNotice = null
             )
 
             while (isActive && !cancelRequested) {
                 val now = System.currentTimeMillis()
-                // Also pick up leases that expired while this worker was waiting.
-                // The provider outcome of an expired in-flight send is UNKNOWN:
-                // it must never go back to the queue automatically.
                 db.messageDao().markStuckUncertain(
                     now,
                     "مهلت ارسال پایان یافت؛ نتیجهٔ ارائه‌دهنده نامشخص است و بررسی انسانی لازم است"
@@ -107,20 +138,13 @@ class SendEngine(
                     waitWhilePaused()
                     if (cancelRequested) break
                 }
-                // Daily cap BEFORE claiming: once a row is claimed it is SENDING,
-                // and a SENDING row must never return to QUEUED automatically.
                 val settings = prefs.load()
                 if (sentToday >= settings.dailyCap) {
-                    // candidate is still APPROVED/QUEUED: leave it untouched for
-                    // tomorrow's run and just stop the queue.
                     log(candidate, false, "سقف روزانه رسیده است؛ صف متوقف شد")
                     break
                 }
-                // Atomic claim: only one worker can own this message.
                 if (db.messageDao().claim(candidate.id, OWNER, now + LEASE_MS, now) == 0) continue
                 val msg = db.messageDao().byId(candidate.id) ?: continue
-                // Defence in depth: a claimed row must still be an approved,
-                // non-terminal message. Never send DRAFT / SENT / SKIPPED / UNCERTAIN.
                 if (!MessageState.isSendable(candidate.status) || msg.status != MessageState.SENDING) {
                     settle(msg, MessageState.SKIPPED, "وضعیت پیام دیگر قابل ارسال نیست")
                     skipped++
@@ -128,7 +152,6 @@ class SendEngine(
                     continue
                 }
 
-                // ---- compliance / policy guards (before ANY network call) ----
                 if (prefs.isSuppressed(msg.email, msg.domain)) {
                     settle(msg, MessageState.SKIPPED, "در فهرست عدم ارسال (opt-out)")
                     skipped++
@@ -146,7 +169,7 @@ class SendEngine(
 
                 val paths = msg.pdfPaths.split("||").filter { it.isNotBlank() }
                 val names = if (msg.attachmentNames.isNotBlank()) {
-                    msg.attachmentNames.split("||").map { it.trim() }
+                    msg.attachmentNames.split("||").map { it.trim() }.filter { it.isNotEmpty() }
                 } else {
                     paths.map { AttachmentPolicy.displayName(it) }
                 }
@@ -159,8 +182,6 @@ class SendEngine(
                     continue
                 }
 
-                // Bounded read: never let a huge file fill the heap. Brevo's
-                // conservative per-attachment ceiling is 4 MB.
                 val attachments = mutableListOf<Pair<String, ByteArray>>()
                 var readProblem: String? = null
                 val perFileCap = minOf(
@@ -176,21 +197,24 @@ class SendEngine(
                         break
                     }
                 }
-                val approvedPages = msg.pageCounts()
+                val approvedPages = msg.pageCounts().filterNotNull()
                 val approvedHashes = msg.attachmentSha256
                     ?.split("||")
                     ?.map { it.trim() }
+                    ?.filter { it.isNotEmpty() }
                     .orEmpty()
 
-                val actualSnapshots = try {
-                    attachments.map { (_, bytes) ->
-                        AttachmentSnapshotReader.inspect(bytes)
+                val actualSnapshots = if (readProblem == null) {
+                    try {
+                        attachments.map { (_, bytes) ->
+                            AttachmentSnapshotReader.inspect(bytes)
+                        }
+                    } catch (e: Exception) {
+                        readProblem = "اعتبارسنجی PDF ناموفق بود: " +
+                            PrivacyRedactor.redact(e.message).take(100)
+                        emptyList()
                     }
-                } catch (e: Exception) {
-                    readProblem = "اعتبارسنجی PDF ناموفق بود: " +
-                        PrivacyRedactor.redact(e.message).take(100)
-                    emptyList()
-                }
+                } else emptyList()
 
                 val fileProblem = readProblem ?: AttachmentGuard.validateFiles(
                     names = names,
@@ -201,8 +225,6 @@ class SendEngine(
                     perFileCapMb = settings.maxAttachmentMb
                 )
                 if (fileProblem != null) {
-                    // Attachment problems are deterministic: do not retry, but do
-                    // not burn the message either - keep it for human repair.
                     settle(msg, MessageState.FAILED, fileProblem)
                     failed++
                     _state.value = _state.value.copy(failed = failed)
@@ -210,7 +232,6 @@ class SendEngine(
                     continue
                 }
 
-                // Stable idempotency key, persisted BEFORE the first request.
                 val uuid = msg.messageUuid?.takeIf { it.isNotBlank() }
                     ?: UUID.randomUUID().toString()
                 if (msg.messageUuid.isNullOrBlank()) {
@@ -238,7 +259,6 @@ class SendEngine(
                     _state.value = _state.value.copy(sent = sent, sentToday = sentToday)
                     log(msg, true, "ارسال شد | پیوست: " + names.joinToString(" + "))
                 } catch (e: DuplicateSendException) {
-                    // Brevo recognised the UUID: the first attempt DID go out.
                     settle(msg, MessageState.SENT, null, sent = true, attempts = attempts)
                     sent++
                     sentToday++
@@ -256,7 +276,7 @@ class SendEngine(
                         failed++
                         _state.value = _state.value.copy(failed = failed)
                     }
-                    log(msg, false, if (next == MessageState.QUEUED) "تلاش $attempts ناموفق، دوباره تلاش میشود" else "ناموفق پس از $attempts تلاش")
+                    log(msg, false, if (next == MessageState.QUEUED) "تلاش $attempts ناموفق، دوباره تلاش می‌شود" else "ناموفق پس از $attempts تلاش")
                 }
 
                 val next = db.messageDao().nextSendable(System.currentTimeMillis())
@@ -311,7 +331,6 @@ class SendEngine(
         _state.value = _state.value.copy(paused = false)
     }
 
-    /** Logs contain a public domain and a MASKED address - never raw PII. */
     private suspend fun log(msg: MessageEntity, ok: Boolean, text: String) {
         val clean = PrivacyRedactor.redact(text).take(300)
         val entry = LogEntry(
@@ -332,7 +351,6 @@ class SendEngine(
         set(java.util.Calendar.MILLISECOND, 0)
     }.timeInMillis
 
-    /** Streaming read with a hard ceiling: no unconditional readBytes() into heap. */
     private fun readBounded(context: Context, uriString: String, maxBytes: Long): ByteArray {
         val stream = context.contentResolver.openInputStream(Uri.parse(uriString))
             ?: throw IOException("باز کردن پیوست ناموفق بود")

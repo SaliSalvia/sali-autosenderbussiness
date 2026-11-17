@@ -10,10 +10,10 @@ import java.security.MessageDigest
 
 class AttachmentGuardTest {
 
-    private val names = listOf("acme_trial_fa.pdf", "acme_trial_en.pdf")
+    private val names = listOf("2026-11-14_13-06_trial_fa.pdf", "2026-11-14_13-06_trial.pdf")
 
-    private fun pdf(size: Int = 64): ByteArray {
-        val b = ByteArray(size)
+    private fun pdf(size: Int = 64, tag: Byte = 0): ByteArray {
+        val b = ByteArray(size) { tag }
         "%PDF-1.4".toByteArray().copyInto(b)
         return b
     }
@@ -23,11 +23,26 @@ class AttachmentGuardTest {
             .joinToString("") { "%02x".format(it) }
 
     @Test
-    fun acceptsTheTwoValidTwoPageTrials() {
-        val payloads = listOf(pdf(), pdf())
+    fun acceptsTwoValidPdfs() {
+        val payloads = listOf(pdf(), pdf(size = 80))
         assertNull(
             AttachmentGuard.validateFiles(
                 names, listOf(2, 2), payloads.map { sha256(it) }, listOf(2, 2), payloads, 4
+            )
+        )
+    }
+
+    @Test
+    fun acceptsSingleValidPdf() {
+        val payloads = listOf(pdf())
+        assertNull(
+            AttachmentGuard.validateFiles(
+                listOf("single_report.pdf"),
+                listOf(4),
+                payloads.map { sha256(it) },
+                listOf(4),
+                payloads,
+                4
             )
         )
     }
@@ -43,11 +58,11 @@ class AttachmentGuardTest {
     }
 
     @Test
-    fun rejectsWrongApprovedPageCount() {
+    fun rejectsZeroPageCount() {
         val payloads = listOf(pdf(), pdf())
         assertNotNull(
             AttachmentGuard.validateFiles(
-                names, listOf(2, 9), payloads.map { sha256(it) }, listOf(2, 9), payloads, 4
+                names, listOf(2, 0), payloads.map { sha256(it) }, listOf(2, 0), payloads, 4
             )
         )
     }
@@ -64,9 +79,9 @@ class AttachmentGuardTest {
 
     @Test
     fun rejectsFileChangedAfterApproval() {
-        val payloads = listOf(pdf(), pdf())
+        val payloads = listOf(pdf(64, 1), pdf(64, 2))
         val approvedHashes = payloads.map { sha256(it) }
-        val tampered = listOf(payloads[0], pdf())
+        val tampered = listOf(payloads[0], pdf(64, 9))
         val problem = AttachmentGuard.validateFiles(
             names, listOf(2, 2), approvedHashes, listOf(2, 2), tampered, 4
         )

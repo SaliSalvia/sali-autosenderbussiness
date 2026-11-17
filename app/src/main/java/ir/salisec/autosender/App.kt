@@ -4,7 +4,9 @@ import android.app.Application
 import androidx.room.Room
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import ir.salisec.autosender.ai.AiClient
+import ir.salisec.autosender.ai.AiResult
 import ir.salisec.autosender.ai.Enricher
+import ir.salisec.autosender.ai.QualityReport
 import ir.salisec.autosender.data.AppDatabase
 import ir.salisec.autosender.data.CampaignEntity
 import ir.salisec.autosender.data.CampaignSnapshot
@@ -27,32 +29,67 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
-/** Campaign wizard state. Persisted (minus report text) so killing the app
- *  never loses the domains, contacts, selection or public-context cache. */
+/** Draft/generated email state held in memory while navigating tabs. */
+data class CampaignDraftItem(
+    val key: String,
+    val domain: String,
+    val email: String,
+    val name: String?,
+    val match: DomainMatch,
+    val style: String = "BUSINESS",
+    val subject: String = "",
+    val preheader: String = "",
+    val body: String = "",
+    val subjectAlternatives: List<String> = emptyList(),
+    val quality: QualityReport = QualityReport(),
+    val generated: Boolean = false,
+    val approved: Boolean = false,
+    val generating: Boolean = false,
+    val statusNote: String = "",
+    val error: String? = null,
+    val messageUuid: String? = null
+) {
+    fun toResult(): AiResult = AiResult(
+        subject = subject,
+        preheader = preheader,
+        body = body,
+        subjectAlternatives = subjectAlternatives,
+        quality = quality
+    )
+}
+
+/** Campaign studio state, preserved across tab navigation and persisted to Room. */
 class CampaignSession {
+    val rawEmailsInput = MutableStateFlow("")
     val domains = MutableStateFlow<List<String>>(emptyList())
     val contacts = MutableStateFlow<Map<String, Contact>>(emptyMap())
     val matches = MutableStateFlow<List<DomainMatch>>(emptyList())
     val selected = MutableStateFlow<Set<String>>(emptySet())
-    /** You.com result cache - one public-context lookup per domain, not one per email. */
     val contexts = MutableStateFlow<Map<String, CompanyContext>>(emptyMap())
+    val drafts = MutableStateFlow<List<CampaignDraftItem>>(emptyList())
 
     fun restore(s: CampaignSnapshotData) {
         domains.value = s.domains
-        contacts.value = s.contacts.associateBy { it.domain }
+        contacts.value = s.contacts.associateBy { it.email.ifBlank { it.domain } }
+        if (s.contacts.isNotEmpty()) {
+            rawEmailsInput.value = s.contacts.joinToString("\n") { c ->
+                if (!c.name.isNullOrBlank()) "${c.email}, ${c.name}" else c.email
+            }
+        }
         selected.value = s.selected
         contexts.value = s.contexts.associateBy { it.domain }
-        // Report bundles contain PDF text and SAF URIs; they are re-read on the
-        // Reports step instead of being copied into the database.
         matches.value = emptyList()
+        drafts.value = emptyList()
     }
 
     fun reset() {
+        rawEmailsInput.value = ""
         domains.value = emptyList()
         contacts.value = emptyMap()
         matches.value = emptyList()
         selected.value = emptySet()
         contexts.value = emptyMap()
+        drafts.value = emptyList()
     }
 }
 
@@ -71,9 +108,6 @@ class App : Application() {
         super.onCreate()
         PDFBoxResourceLoader.init(applicationContext)
         db = Room.databaseBuilder(this, AppDatabase::class.java, "sali.db")
-            // Real forward migrations only. Pre-v2 schemas were never shipped
-            // in a released APK, so destructive fallback is removed: a missing
-            // migration must CRASH, never silently wipe user data.
             .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
             .build()
         prefs = Prefs(this)
@@ -87,16 +121,14 @@ class App : Application() {
         persistCampaign()
     }
 
-    /** In-app "delete all data" required by PRIVACY.md. Removes queued and
-     *  approved messages, masked logs, the persisted campaign draft and every
-     *  encrypted setting. Exported log files live in the user's own storage and
-     *  must be deleted by the user. */
     suspend fun clearAllData() = withContext(Dispatchers.IO) {
         db.messageDao().clearAll()
         db.logDao().clearAll()
         db.campaignDao().clearAll()
         prefs.clear()
+        enricher.clearCache()
         session.reset()
+        engine.refreshLogs()
     }
 
     private fun persistCampaign() {

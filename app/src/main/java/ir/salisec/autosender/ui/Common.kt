@@ -1,48 +1,161 @@
 package ir.salisec.autosender.ui
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-fun ScreenScaffold(content: @Composable ColumnScope.() -> Unit) {
-    Surface(modifier = Modifier.fillMaxSize()) {
-        Column(
+fun ScreenScaffold(
+    scrollable: Boolean = true,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val base = Modifier
+        .fillMaxSize()
+        .background(MaterialTheme.colorScheme.background)
+    val mod = if (scrollable) {
+        base.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 14.dp)
+    } else {
+        base.padding(horizontal = 16.dp, vertical = 14.dp)
+    }
+    Column(
+        modifier = mod,
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        content()
+    }
+}
+
+@Composable
+fun HeroBanner(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val c1 = MaterialTheme.colorScheme.primaryContainer
+    val c2 = MaterialTheme.colorScheme.surface
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)),
+        tonalElevation = 2.dp,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Box(
             modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) { content() }
+                .fillMaxWidth()
+                .background(Brush.linearGradient(listOf(c1, c2)))
+                .padding(20.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
+        }
     }
 }
 
 @Composable
 fun Title(text: String) {
-    Text(text = text, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+    Text(
+        text = text,
+        style = MaterialTheme.typography.headlineSmall,
+        color = MaterialTheme.colorScheme.onBackground
+    )
 }
 
 @Composable
-fun SubTitle(text: String) {
-    Text(text = text, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+fun SubTitle(text: String, color: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = color
+    )
 }
 
 @Composable
-fun Section(header: String, content: @Composable ColumnScope.() -> Unit) {
+fun Section(
+    header: String,
+    icon: ImageVector? = null,
+    badge: String? = null,
+    badgeColor: Color = MaterialTheme.colorScheme.primary,
+    content: @Composable ColumnScope.() -> Unit
+) {
     Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
+        tonalElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(header, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (icon != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            icon,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                Text(
+                    header,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                if (!badge.isNullOrBlank()) {
+                    Chip(badge, badgeColor)
+                }
+            }
             content()
         }
     }
@@ -54,43 +167,121 @@ fun LabeledField(
     value: String,
     multiline: Boolean = false,
     singleLine: Boolean = false,
-    // MUST be the last parameter: Kotlin binds a trailing lambda to the final parameter.
+    placeholder: String = "",
+    isSecret: Boolean = false,
+    modifier: Modifier = Modifier,
     onChange: (String) -> Unit
 ) {
-    Column(Modifier.fillMaxWidth()) {
-        Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         OutlinedTextField(
             value = value,
             onValueChange = onChange,
             modifier = Modifier.fillMaxWidth(),
+            placeholder = if (placeholder.isNotBlank()) {
+                { Text(placeholder, style = MaterialTheme.typography.bodySmall) }
+            } else null,
             minLines = if (multiline) 3 else 1,
-            maxLines = if (multiline) 12 else 1,
-            singleLine = singleLine
+            maxLines = if (multiline) 10 else 1,
+            singleLine = singleLine && !multiline,
+            visualTransformation = if (isSecret) PasswordVisualTransformation() else VisualTransformation.None,
+            shape = RoundedCornerShape(14.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+            )
         )
     }
 }
 
 @Composable
-fun BigButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+fun BigButton(
+    text: String,
+    enabled: Boolean = true,
+    loading: Boolean = false,
+    icon: ImageVector? = null,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
     Button(
         onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(10.dp)
-    ) { Text(text, fontSize = 16.sp) }
+        enabled = enabled && !loading,
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .minimumInteractiveComponentSize(),
+        shape = RoundedCornerShape(14.dp),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+        elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
+    ) {
+        if (loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.onPrimary
+            )
+            Spacer(Modifier.width(10.dp))
+        } else if (icon != null) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(19.dp))
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(text, style = MaterialTheme.typography.labelLarge)
+    }
 }
 
 @Composable
-fun Chip(text: String, color: Color = GreenOk) {
-    Surface(shape = RoundedCornerShape(50), color = color.copy(alpha = 0.18f)) {
-        Text(text, color = color, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
+fun Chip(
+    text: String,
+    color: Color = GreenOk,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null
+) {
+    val clickMod = if (onClick != null) modifier.clickable(onClick = onClick) else modifier
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = color.copy(alpha = 0.14f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.30f)),
+        modifier = clickMod
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(color)
+            )
+            Text(
+                text,
+                color = color,
+                style = MaterialTheme.typography.labelMedium,
+                fontSize = 11.5.sp
+            )
+        }
     }
 }
 
 @Composable
 fun LoadingBox(text: String = "لطفاً صبر کنید...") {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        CircularProgressIndicator(Modifier.size(22.dp))
-        Text(text)
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.5.dp)
+            Text(text, style = MaterialTheme.typography.bodyMedium)
+        }
     }
 }

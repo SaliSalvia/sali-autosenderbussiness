@@ -9,30 +9,125 @@ import org.json.JSONObject
 
 /** Reads the user-selected "sitest" folder (SAF).
  *
- *  POLICY (final): every PDF in a domain folder is opened and its text is given to the AI.
- *  Only the two 2-page trial PDFs (Persian + English) are ever attached / sent. */
+ *  Fast folder indexing + automatic matching by email/domain.
+ *  Picks the 2 newest PDFs in each domain folder for attachment, while reading
+ *  recent PDFs + sidecar JSON for grounded AI marketing copy. */
 object ReportReader {
 
-    fun folderCandidates(domain: String): List<String> {
-        val d = domain.removePrefix("www.").lowercase()
-        return listOf(d, d.replace(".", "_"), d.replace(".", "-"), d.substringBefore('.'))
+    private val freeEmailDomains = setOf(
+        "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "outlook.com",
+        "hotmail.com", "live.com", "icloud.com", "me.com", "proton.me", "protonmail.com",
+        "mail.ru", "yandex.com", "yandex.ru", "aol.com", "zoho.com"
+    )
+
+    /** Suggested initial URI for OpenDocumentTree so the picker opens straight to /sitest. */
+    fun initialSitestTreeUri(): Uri =
+        Uri.parse("content://com.android.externalstorage.documents/document/primary%3Asitest")
+
+    fun indexSubfolders(root: DocumentFile): List<DocumentFile> = try {
+        root.listFiles().filter { it.isDirectory }
+    } catch (e: Exception) {
+        emptyList()
     }
 
-    fun findFolder(root: DocumentFile, domain: String): DocumentFile? {
-        val candidates = folderCandidates(domain).toHashSet()
-        val subs = root.listFiles().filter { it.isDirectory }
-        return subs.firstOrNull { it.name?.lowercase() in candidates }
-            ?: subs.firstOrNull { c -> candidates.any { c.name?.lowercase()?.startsWith(it) == true } }
+    fun folderCandidates(domain: String, email: String = ""): List<String> {
+        val out = linkedSetOf<String>()
+        val d = domain.trim().removePrefix("www.").lowercase()
+        val local = email.substringBefore('@').trim().lowercase()
+
+        fun addDomainVariants(dom: String) {
+            if (dom.isBlank()) return
+            out.add(dom)
+            out.add(dom.replace(".", "_"))
+            out.add(dom.replace(".", "-"))
+            val stem = dom.substringBefore('.')
+            if (stem.length >= 3) out.add(stem)
+        }
+
+        if (d.isNotBlank() && d !in freeEmailDomains) {
+            addDomainVariants(d)
+            // Strip subdomains progressively (e.g., mail.company.ir -> company.ir)
+            val labels = d.split('.')
+            if (labels.size > 2) {
+                for (i in 1 until labels.size - 1) {
+                    val parent = labels.subList(i, labels.size).joinToString(".")
+                    if (DomainValidator.isValid(parent)) addDomainVariants(parent)
+                }
+            }
+        }
+        if (local.length >= 3) {
+            out.add(local)
+            out.add(local.replace(".", "_"))
+            out.add(local.replace("-", "_"))
+        }
+        if (d in freeEmailDomains && d.isNotBlank()) {
+            addDomainVariants(d)
+        }
+        return out.toList()
     }
 
+    fun findFolder(root: DocumentFile, domain: String, email: String = ""): DocumentFile? =
+        findFolderInIndex(indexSubfolders(root), domain, email)
+
+    fun findFolderInIndex(
+        subfolders: List<DocumentFile>,
+        domain: String,
+        email: String = ""
+    ): DocumentFile? {
+        if (subfolders.isEmpty()) return null
+        val byName = subfolders.associateBy { it.name?.trim()?.lowercase().orEmpty() }
+        val candidates = folderCandidates(domain, email)
+
+        // 1. Exact candidate match in priority order (domain > root domain > stem > local)
+        for (c in candidates) {
+            byName[c]?.let { return it }
+        }
+
+        // 2. Prefix match (e.g., folder "numberland.ir_2026" matches "numberland.ir")
+        for (c in candidates) {
+            if (c.length < 3) continue
+            subfolders.firstOrNull { f ->
+                val fn = f.name?.trim()?.lowercase().orEmpty()
+                fn.startsWith(c) || c.startsWith(fn)
+            }?.let { return it }
+        }
+
+        // 3. Substring match on meaningful stems (>= 4 chars)
+        for (c in candidates) {
+            if (c.length < 4) continue
+            subfolders.firstOrNull { f ->
+                val fn = f.name?.trim()?.lowercase().orEmpty()
+                fn.contains(c)
+            }?.let { return it }
+        }
+
+        return null
+    }
+
+    /** Lists all PDFs in [folder] sorted NEWEST FIRST by filename timestamp / lastModified. */
     fun pdfsIn(folder: DocumentFile): List<DocumentFile> =
-        folder.listFiles().filter { it.name?.lowercase()?.endsWith(".pdf") == true }
-            .sortedBy { it.name?.lowercase() ?: "" }
+        folder.listFiles()
+            .filter { it.isFile && it.name?.lowercase()?.endsWith(".pdf") == true }
+            .sortedWith(
+                compareByDescending<DocumentFile> {
+                    maxOf(
+                        AttachmentPolicy.extractFilenameTimestamp(it.name.orEmpty()),
+                        it.lastModified()
+                    )
+                }
+                    .thenByDescending { AttachmentPolicy.extractFilenameTimestamp(it.name.orEmpty()) }
+                    .thenByDescending { it.lastModified() }
+                    .thenByDescending {
+                        val n = it.name.orEmpty()
+                        if (AttachmentPolicy.isTrialName(n) && !AttachmentPolicy.isFullName(n)) 1 else 0
+                    }
+                    .thenBy { it.name?.lowercase().orEmpty() }
+            )
 
     fun jsonIn(folder: DocumentFile): DocumentFile? =
-        folder.listFiles().firstOrNull { it.name?.lowercase()?.endsWith(".json") == true }
+        folder.listFiles().firstOrNull { it.isFile && it.name?.lowercase()?.endsWith(".json") == true }
 
-    /** Main entry: read ALL PDFs + optional JSON sidecar for one domain. */
+    /** Main entry: read newest PDFs (up to 6 for speed, always including the 2 newest attached PDFs) + optional JSON sidecar. */
     fun readBundle(context: Context, domain: String, folder: DocumentFile): ReportBundle {
         val warnings = mutableListOf<String>()
         val docs = mutableListOf<PdfDoc>()
@@ -46,12 +141,17 @@ object ReportReader {
             }
         }
 
-        for (f in pdfsIn(folder)) {
+        val allPdfFiles = pdfsIn(folder)
+        val toParse = allPdfFiles.take(6)
+
+        for (f in toParse) {
             val name = f.name ?: "report.pdf"
+            val mod = f.lastModified()
+            val len = f.length()
             try {
                 val stream = context.contentResolver.openInputStream(f.uri)
                 if (stream == null) {
-                    docs.add(PdfDoc(name, f.uri.toString(), readOk = false))
+                    docs.add(PdfDoc(name, f.uri.toString(), readOk = false, lastModified = mod, sizeBytes = len))
                     warnings.add("باز کردن $name ناموفق بود")
                     continue
                 }
@@ -63,15 +163,22 @@ object ReportReader {
                         } catch (e: Exception) {
                             ""
                         }
-                        docs.add(PdfDoc(name = name, uri = f.uri.toString(), pages = pages, text = text))
-                        if (AttachmentPolicy.isTrialName(name) && pages != null && pages != 2) {
-                            warnings.add("نسخه trial «$name» $pages صفحه دارد (انتظار: ۲ صفحه) - نام فایل را بررسی کن")
-                        }
-                        if (text.isBlank()) warnings.add("متنی از «$name» استخراج نشد")
+                        docs.add(
+                            PdfDoc(
+                                name = name,
+                                uri = f.uri.toString(),
+                                pages = pages,
+                                text = text,
+                                readOk = true,
+                                lastModified = mod,
+                                sizeBytes = len
+                            )
+                        )
+                        if (text.isBlank()) warnings.add("متنی از «$name» استخراج نشد (فایل پیوست همچنان ارسال می‌شود)")
                     }
                 }
             } catch (e: Exception) {
-                docs.add(PdfDoc(name, f.uri.toString(), readOk = false))
+                docs.add(PdfDoc(name, f.uri.toString(), readOk = false, lastModified = mod, sizeBytes = len))
                 warnings.add("پردازش «$name» ناموفق: " + (e.message?.take(80) ?: ""))
             }
         }
@@ -80,18 +187,15 @@ object ReportReader {
         val scannedData = parsePdfFacts(domain, docs)
         val report = merge(sidecarData, scannedData)
 
-        if (docs.isEmpty()) warnings.add("هیچ PDF در پوشه $domain پیدا نشد")
-        if (sidecar == null) warnings.add("فایل JSON sidecar نیست؛ اعداد از متن PDFها استخراج شد (توصیه: sidecar بگذار)")
-        if (report?.score == null && report?.findings == null) {
-            warnings.add("امتیاز یا تعداد یافته استخراج نشد - متن ایمیل فقط بر اساس شواهد موجود نوشته می‌شود")
+        if (allPdfFiles.isEmpty()) {
+            warnings.add("هیچ PDF در پوشه ${folder.name} پیدا نشد")
         }
-        val trial = AttachmentPolicy.selectTrialPair(docs)
-        if (trial.size < 2) {
-            warnings.add("دو نسخه trial دوصفحه‌ای (فا + en) پیدا نشد (پیدا شد: ${trial.size}) - تا اصلاح نام فایل‌ها اجازه تأیید نداری")
+        val selected = AttachmentPolicy.selectNewestPair(docs)
+        if (selected.size == 1 && allPdfFiles.size == 1) {
+            warnings.add("فقط ۱ فایل PDF در پوشه وجود دارد؛ همان ۱ فایل پیوست می‌شود")
         }
-        val extraFiles = docs.size - trial.size
-        if (extraFiles > 0) {
-            warnings.add("$extraFiles فایل دیگر فقط توسط AI خوانده می‌شود و مطلقا پیوست نخواهد شد")
+        if (allPdfFiles.size > 2) {
+            warnings.add("از ${allPdfFiles.size} فایل PDF موجود، ۲ مورد جدیدترین برای پیوست انتخاب شدند")
         }
 
         return ReportBundle(

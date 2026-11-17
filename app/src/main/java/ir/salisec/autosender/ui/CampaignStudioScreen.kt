@@ -1,0 +1,961 @@
+package ir.salisec.autosender.ui
+
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.documentfile.provider.DocumentFile
+import ir.salisec.autosender.App
+import ir.salisec.autosender.CampaignDraftItem
+import ir.salisec.autosender.data.AggregateStats
+import ir.salisec.autosender.data.AttachmentGuard
+import ir.salisec.autosender.data.AttachmentSnapshotReader
+import ir.salisec.autosender.data.ContactsParser
+import ir.salisec.autosender.data.DomainMatch
+import ir.salisec.autosender.data.MessageEntity
+import ir.salisec.autosender.data.ReportBundle
+import ir.salisec.autosender.data.ReportReader
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import java.util.UUID
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun CampaignStudioScreen(
+    app: App,
+    onOpenSettings: () -> Unit,
+    onGoToSend: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    val rawInput by app.session.rawEmailsInput.collectAsState()
+    val matches by app.session.matches.collectAsState()
+    val selected by app.session.selected.collectAsState()
+    val drafts by app.session.drafts.collectAsState()
+
+    var step by remember { mutableIntStateOf(if (drafts.isNotEmpty()) 1 else 0) }
+    var scanning by remember { mutableStateOf(false) }
+    var scanError by remember { mutableStateOf<String?>(null) }
+    var sitestUri by remember { mutableStateOf(app.prefs.load().sitestFolderUri) }
+    var batchGenerating by remember { mutableStateOf(false) }
+    var batchProgressText by remember { mutableStateOf("") }
+    var genError by remember { mutableStateOf<String?>(null) }
+    var activeModelLabel by remember { mutableStateOf(app.prefs.load().hcnsModel) }
+    var defaultStyle by remember { mutableStateOf("BUSINESS") }
+
+    val suppressed = remember { app.prefs.suppressedSet() }
+    val allParsedContacts = remember(rawInput) { ContactsParser.parse(rawInput) }
+    val contacts = remember(allParsedContacts, suppressed) {
+        allParsedContacts.filter {
+            !suppressed.contains(it.email.lowercase()) && !suppressed.contains(it.domain.lowercase())
+        }
+    }
+    val blockedCount = allParsedContacts.size - contacts.size
+
+    // Keep session contacts & domains synchronized with parsed emails
+    LaunchedEffect(contacts) {
+        app.session.contacts.value = contacts.associateBy { it.email.ifBlank { it.domain } }
+        app.session.domains.value = contacts.map { it.domain }.distinct()
+    }
+
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val content = try {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
+            } catch (_: Exception) {
+                ""
+            }
+            if (content.isNotBlank()) app.session.rawEmailsInput.value = content
+        }
+    }
+
+    val treePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) { }
+            val s = app.prefs.load()
+            app.prefs.save(s.copy(sitestFolderUri = uri.toString()))
+            sitestUri = uri.toString()
+        }
+    }
+
+    fun launchSitestPicker() {
+        val initUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ReportReader.initialSitestTreeUri()
+        } else null
+        treePicker.launch(initUri)
+    }
+
+    fun runAutoMatchScan() {
+        if (contacts.isEmpty() || sitestUri.isBlank()) return
+        scope.launch {
+            scanning = true
+            scanError = null
+            try {
+                val root = DocumentFile.fromTreeUri(context, Uri.parse(sitestUri))
+                if (root == null || !root.canRead()) {
+                    scanError = "دسترسی به پوشه sitest معتبر نیست؛ لطفاً پوشه را دوباره انتخاب کنید."
+                    scanning = false
+                    return@launch
+                }
+                val result = withContext(Dispatchers.IO) {
+                    val subfolders = ReportReader.indexSubfolders(root)
+                    val resolvedFolders = contacts.associate { c ->
+                        c.email to ReportReader.findFolderInIndex(subfolders, c.domain, c.email)
+                    }
+                    val uniqueFolderTargets = resolvedFolders.values
+                        .filterNotNull()
+                        .distinctBy { it.uri.toString() }
+
+                    val gate = Semaphore(4)
+                    val bundleByUri = coroutineScope {
+                        uniqueFolderTargets.map { folder ->
+                            async {
+                                gate.withPermit {
+                                    val domainHint = folder.name ?: ""
+                                    folder.uri.toString() to (folder.name to ReportReader.readBundle(context, domainHint, folder))
+                                }
+                            }
+                        }.awaitAll()
+                    }.toMap()
+
+                    contacts.map { c ->
+                        val folder = resolvedFolders[c.email]
+                        val pair = folder?.let { bundleByUri[it.uri.toString()] }
+                        val folderName = pair?.first ?: folder?.name
+                        val bundle = pair?.second?.copy(domain = c.domain) ?: ReportBundle(
+                            domain = c.domain,
+                            warnings = listOf("پوشه‌ای با نام «${c.domain}» یا مشابه در sitest پیدا نشد")
+                        )
+                        DomainMatch(
+                            domain = c.domain,
+                            email = c.email,
+                            contactName = c.name,
+                            folderName = folderName,
+                            bundle = bundle,
+                            report = bundle.data,
+                            hasEmail = true
+                        )
+                    }
+                }
+                app.session.matches.value = result
+                app.session.selected.value = result.filter { it.readyForApproval }.map { it.key }.toSet()
+            } catch (e: SecurityException) {
+                scanError = "مجوز دسترسی به پوشه sitest منقضی شده؛ لطفاً دوباره انتخاب کنید."
+            } catch (e: Exception) {
+                scanError = "خطا در بررسی پوشه sitest: " + (e.message?.take(140) ?: "")
+            }
+            scanning = false
+        }
+    }
+
+    // Automatic matching whenever emails or sitest folder changes (debounced for typing speed)
+    val contactsSignature = remember(contacts) { contacts.joinToString("|") { it.email } }
+    LaunchedEffect(contactsSignature, sitestUri) {
+        if (contacts.isNotEmpty() && sitestUri.isNotBlank()) {
+            delay(450)
+            runAutoMatchScan()
+        } else if (contacts.isEmpty()) {
+            app.session.matches.value = emptyList()
+            app.session.selected.value = emptySet()
+        }
+    }
+
+    fun prepareDraftsAndGoToStep2() {
+        val currentMap = drafts.associateBy { it.key }
+        val nextDrafts = selected.mapNotNull { key ->
+            val m = matches.firstOrNull { it.key == key } ?: return@mapNotNull null
+            currentMap[key]?.copy(match = m) ?: CampaignDraftItem(
+                key = key,
+                domain = m.domain,
+                email = m.email,
+                name = m.contactName,
+                match = m,
+                style = defaultStyle
+            )
+        }
+        app.session.drafts.value = nextDrafts
+        step = 1
+    }
+
+    fun updateDraft(key: String, transform: (CampaignDraftItem) -> CampaignDraftItem) {
+        val list = app.session.drafts.value.toMutableList()
+        val idx = list.indexOfFirst { it.key == key }
+        if (idx < 0) return
+        val current = list[idx]
+        val next = transform(current)
+        val scores = matches.mapNotNull { it.report?.score }
+        val aggregate = if (scores.isEmpty()) null else AggregateStats(scores.size, scores.average().toInt())
+        val reviewed = if (next.generated) {
+            val q = app.ai.check(
+                result = next.toResult(),
+                s = app.prefs.load(),
+                bundle = next.match.bundle,
+                aggregate = aggregate,
+                contactName = next.name,
+                isFollowUp = false,
+                domain = next.domain,
+                email = next.email
+            )
+            next.copy(quality = q)
+        } else next
+
+        if (current.approved && !current.messageUuid.isNullOrBlank()) {
+            val uuid = current.messageUuid
+            scope.launch {
+                app.db.messageDao().demote(uuid, "متن پس از تأیید ویرایش شد؛ نیاز به تأیید دوباره")
+            }
+        }
+        list[idx] = if (current.approved) reviewed.copy(approved = false) else reviewed
+        app.session.drafts.value = list
+    }
+
+    suspend fun approveSingleDraft(item: CampaignDraftItem): String? {
+        if (item.approved) return null
+        if (item.match.attachmentUris.isEmpty()) return "${item.domain}: فایل PDF برای پیوست پیدا نشد"
+        val nameProblem = AttachmentGuard.validateNames(item.match.attachmentNames)
+        if (nameProblem != null) return "${item.domain}: $nameProblem"
+
+        val scores = matches.mapNotNull { it.report?.score }
+        val aggregate = if (scores.isEmpty()) null else AggregateStats(scores.size, scores.average().toInt())
+        val q = app.ai.check(
+            result = item.toResult(),
+            s = app.prefs.load(),
+            bundle = item.match.bundle,
+            aggregate = aggregate,
+            contactName = item.name,
+            isFollowUp = false,
+            domain = item.domain,
+            email = item.email
+        )
+        if (!q.passed) {
+            updateDraft(item.key) { it.copy(quality = q) }
+            return "${item.domain}: " + q.blockers.joinToString(" | ")
+        }
+        val s = app.prefs.load()
+        val snapshots = try {
+            withContext(Dispatchers.IO) {
+                item.match.attachmentUris.map { uri ->
+                    AttachmentSnapshotReader.read(context = app, uriString = uri)
+                }
+            }
+        } catch (e: Exception) {
+            return "${item.domain}: خطا در خواندن PDF — ${e.message?.take(120)}"
+        }
+
+        val snapshotProblem = AttachmentGuard.validateFiles(
+            names = item.match.attachmentNames,
+            approvedPages = snapshots.map { it.pages },
+            approvedSha256 = snapshots.map { it.sha256 },
+            actualPages = snapshots.map { it.pages },
+            payloads = snapshots.map { it.bytes },
+            perFileCapMb = s.maxAttachmentMb
+        )
+        if (snapshotProblem != null) return "${item.domain}: $snapshotProblem"
+
+        val uuid = item.messageUuid ?: UUID.randomUUID().toString()
+        val existing = withContext(Dispatchers.IO) { app.db.messageDao().byUuid(uuid) }
+        val entity = MessageEntity(
+            id = existing?.id ?: 0L,
+            domain = item.domain,
+            email = item.email,
+            name = item.name,
+            subject = item.subject,
+            preheader = item.preheader,
+            body = item.body,
+            pdfPaths = item.match.attachmentUris.joinToString("||"),
+            attachmentNames = item.match.attachmentNames.joinToString("||"),
+            attachmentPages = snapshots.joinToString("||") { it.pages.toString() },
+            attachmentSha256 = snapshots.joinToString("||") { it.sha256 },
+            evidenceHash = item.match.bundle.fingerprint(),
+            qualityOk = true,
+            messageUuid = uuid,
+            campaignId = "active",
+            status = "APPROVED"
+        )
+        withContext(Dispatchers.IO) {
+            if (existing != null) app.db.messageDao().update(entity)
+            else app.db.messageDao().insert(entity)
+        }
+        val list = app.session.drafts.value.toMutableList()
+        val idx = list.indexOfFirst { it.key == item.key }
+        if (idx >= 0) {
+            list[idx] = item.copy(approved = true, quality = q, messageUuid = uuid, error = null)
+            app.session.drafts.value = list
+        }
+        return null
+    }
+
+    fun generateBatch(keysToGenerate: List<String>) {
+        if (batchGenerating || keysToGenerate.isEmpty()) return
+        scope.launch {
+            batchGenerating = true
+            genError = null
+            try {
+                var s = app.prefs.load()
+                if (s.hcnsKey.isBlank()) {
+                    genError = "کلید API سایت hcnsec در تنظیمات وارد نشده است."
+                    batchGenerating = false
+                    return@launch
+                }
+
+                // 1. Probe & select strongest available hcnsec model if auto-select is enabled & unverified
+                if (s.autoSelectBestModel && (!s.hcnsModelVerified || s.hcnsModel.isBlank())) {
+                    batchProgressText = "در حال سنجش API hcnsec و انتخاب قوی‌ترین مدل در دسترس..."
+                    val probeRes = app.ai.probeAndSelectBestModel(s)
+                    probeRes.onSuccess { probe ->
+                        s = s.copy(
+                            hcnsModel = probe.selectedModel,
+                            hcnsReviewModel = probe.reviewModel,
+                            hcnsAvailableModels = probe.availableModels.joinToString(","),
+                            hcnsModelVerified = true
+                        )
+                        app.prefs.save(s)
+                        activeModelLabel = probe.selectedModel
+                    }.onFailure { err ->
+                        if (s.hcnsModel.isBlank()) {
+                            genError = "سنجش مدل hcnsec ناموفق بود: ${err.message?.take(140)}"
+                            batchGenerating = false
+                            batchProgressText = ""
+                            return@launch
+                        }
+                    }
+                } else {
+                    activeModelLabel = s.hcnsModel
+                }
+
+                val scores = matches.mapNotNull { it.report?.score }
+                val aggregate = if (scores.isEmpty()) null else AggregateStats(scores.size, scores.average().toInt())
+                val total = keysToGenerate.size
+                var done = 0
+                val gate = Semaphore(3)
+
+                coroutineScope {
+                    keysToGenerate.map { key ->
+                        async {
+                            gate.withPermit {
+                                val snapshotItem = app.session.drafts.value.firstOrNull { it.key == key }
+                                    ?: return@withPermit
+                                updateDraft(key) {
+                                    it.copy(generating = true, error = null, statusNote = "جستجوی کسب‌وکار در You.com...")
+                                }
+                                try {
+                                    val ctx = app.session.contexts.value[snapshotItem.domain]
+                                        ?.takeIf { it.summary.isNotBlank() }
+                                        ?: app.enricher.enrich(s, snapshotItem.domain).also { fresh ->
+                                            if (fresh.summary.isNotBlank()) {
+                                                app.session.contexts.value =
+                                                    app.session.contexts.value + (snapshotItem.domain to fresh)
+                                            }
+                                        }
+
+                                    updateDraft(key) {
+                                        it.copy(statusNote = "طراحی متن با ${activeModelLabel.ifBlank { "AI" }}...")
+                                    }
+
+                                    val r = app.ai.generate(
+                                        s = s,
+                                        bundle = snapshotItem.match.bundle,
+                                        contactName = snapshotItem.name,
+                                        context = ctx,
+                                        aggregate = aggregate,
+                                        style = snapshotItem.style,
+                                        isFollowUp = false,
+                                        domain = snapshotItem.domain,
+                                        email = snapshotItem.email,
+                                        onResolvedModel = { probe ->
+                                            s = s.copy(
+                                                hcnsModel = probe.selectedModel,
+                                                hcnsReviewModel = probe.reviewModel,
+                                                hcnsAvailableModels = probe.availableModels.joinToString(","),
+                                                hcnsModelVerified = true
+                                            )
+                                            app.prefs.save(s)
+                                            activeModelLabel = probe.selectedModel
+                                        }
+                                    )
+                                    updateDraft(key) {
+                                        it.copy(
+                                            subject = r.subject,
+                                            preheader = r.preheader,
+                                            body = r.body,
+                                            subjectAlternatives = r.subjectAlternatives,
+                                            quality = r.quality,
+                                            generated = true,
+                                            approved = false,
+                                            generating = false,
+                                            statusNote = ""
+                                        )
+                                    }
+                                } catch (e: Exception) {
+                                    updateDraft(key) {
+                                        it.copy(
+                                            generating = false,
+                                            statusNote = "",
+                                            error = e.message?.take(180) ?: "خطا در تولید"
+                                        )
+                                    }
+                                } finally {
+                                    done++
+                                    batchProgressText = "پیشرفت تولید: $done از $total"
+                                }
+                            }
+                        }
+                    }.awaitAll()
+                }
+            } finally {
+                batchGenerating = false
+                batchProgressText = ""
+            }
+        }
+    }
+
+    ScreenScaffold {
+        // 2-Step Segmented Studio Header
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            SegmentedButton(
+                selected = step == 0,
+                onClick = { step = 0 },
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                modifier = Modifier.testTag("studio_step_1")
+            ) {
+                Text("۱. ایمیل‌ها و پوشه sitest", maxLines = 1)
+            }
+            SegmentedButton(
+                selected = step == 1,
+                onClick = {
+                    if (drafts.isEmpty() && selected.isNotEmpty()) prepareDraftsAndGoToStep2()
+                    else step = 1
+                },
+                enabled = selected.isNotEmpty() || drafts.isNotEmpty(),
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                modifier = Modifier.testTag("studio_step_2")
+            ) {
+                Text("۲. You.com و تولید AI", maxLines = 1)
+            }
+        }
+
+        if (step == 0) {
+            Section(
+                header = "ورود لیست ایمیل‌ها",
+                icon = Icons.Default.Email,
+                badge = if (contacts.isNotEmpty()) "${contacts.size} ایمیل معتبر" else null,
+                badgeColor = GreenOk
+            ) {
+                SubTitle("آدرس‌های ایمیل را وارد یا Paste کنید (هر خط یک ایمیل، یا با کاما/فاصله، یا فایل CSV). دامنه و پوشه sitest به صورت خودکار تشخیص داده می‌شوند.")
+                LabeledField(
+                    label = "لیست ایمیل‌های هدف",
+                    value = rawInput,
+                    multiline = true,
+                    placeholder = "ceo@inchand.com\ninfo@numberland.ir\nsalar@example.com",
+                    modifier = Modifier.testTag("campaign_emails_input")
+                ) {
+                    app.session.rawEmailsInput.value = it
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { filePicker.launch(arrayOf("text/*", "text/csv", "application/csv")) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("ورود فایل CSV / TXT")
+                    }
+                    if (rawInput.isNotBlank()) {
+                        TextButton(onClick = { app.session.reset() }) {
+                            Text("پاک کردن", color = RedErr)
+                        }
+                    }
+                }
+                if (blockedCount > 0) {
+                    Chip("$blockedCount مخاطب به دلیل لیست عدم ارسال (opt-out) کنار گذاشته شد", OrangeWarn)
+                }
+            }
+
+            if (sitestUri.isBlank()) {
+                Section(
+                    header = "اتصال به پوشه sitest",
+                    icon = Icons.Default.FolderOpen,
+                    badge = "الزامی (۱ بار)",
+                    badgeColor = OrangeWarn
+                ) {
+                    SubTitle("برای تطبیق خودکار ایمیل‌ها با پوشه سایت‌ها و پیوست ۲ فایل PDF جدیدترین، پوشه sitest در حافظه داخلی گوشی را یک‌بار انتخاب کنید.")
+                    BigButton(
+                        text = "انتخاب پوشه sitest",
+                        icon = Icons.Default.FolderOpen,
+                        modifier = Modifier.testTag("campaign_pick_sitest")
+                    ) {
+                        launchSitestPicker()
+                    }
+                }
+            } else {
+                Section(
+                    header = "تطبیق خودکار پوشه و انتخاب ۲ PDF جدیدترین",
+                    icon = Icons.Default.FolderOpen,
+                    badge = if (matches.isNotEmpty()) "${matches.count { it.readyForApproval }} از ${matches.size} آماده" else "متصل",
+                    badgeColor = if (matches.any { it.readyForApproval }) GreenOk else MaterialTheme.colorScheme.primary
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { runAutoMatchScan() },
+                            enabled = contacts.isNotEmpty() && !scanning,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("اسکن مجدد")
+                        }
+                        OutlinedButton(
+                            onClick = { launchSitestPicker() },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("تغییر پوشه sitest")
+                        }
+                    }
+
+                    scanError?.let { Chip(it, RedErr) }
+                    if (scanning) {
+                        LoadingBox("در حال جستجوی خودکار پوشه‌ها و استخراج ۲ PDF جدیدترین...")
+                    } else if (matches.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            matches.forEach { m ->
+                                MatchCard(
+                                    m = m,
+                                    checked = selected.contains(m.key),
+                                    onToggle = { chk ->
+                                        val next = app.session.selected.value.toMutableSet()
+                                        if (chk) next.add(m.key) else next.remove(m.key)
+                                        app.session.selected.value = next
+                                    }
+                                )
+                            }
+                        }
+                    } else if (contacts.isEmpty()) {
+                        SubTitle("پس از ورود ایمیل‌ها، برنامه به صورت خودکار پوشه‌های هم‌نام را در sitest پیدا می‌کند.")
+                    }
+                }
+            }
+
+            BigButton(
+                text = "مرحله بعد: سرچ You.com و طراحی پیام (${selected.size} مخاطب)",
+                enabled = selected.isNotEmpty() && !scanning,
+                icon = Icons.Default.AutoAwesome,
+                modifier = Modifier.testTag("campaign_next_step")
+            ) {
+                prepareDraftsAndGoToStep2()
+            }
+        } else {
+            // STEP 2: You.com + hcnsec Strongest Model + Review/Approve
+            val contextsMap by app.session.contexts.collectAsState()
+            val approvedCount = drafts.count { it.approved }
+            val readyToApproveCount = drafts.count { it.generated && !it.approved && it.quality.passed }
+
+            Section(
+                header = "تنظیم سبک و تولید هوشمند پیام‌ها",
+                icon = Icons.Default.AutoAwesome,
+                badge = if (activeModelLabel.isNotBlank()) activeModelLabel else "انتخاب خودکار قوی‌ترین مدل",
+                badgeColor = if (activeModelLabel.isNotBlank()) GreenOk else OrangeWarn
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        "BUSINESS" to "فروش B2B",
+                        "TECHNICAL" to "فنی / CTO",
+                        "DIRECT" to "کوتاه و مستقیم"
+                    ).forEach { (code, label) ->
+                        FilterChip(
+                            selected = defaultStyle == code,
+                            onClick = {
+                                defaultStyle = code
+                                app.session.drafts.value = app.session.drafts.value.map {
+                                    if (!it.generated) it.copy(style = code) else it
+                                }
+                            },
+                            label = { Text(label) }
+                        )
+                    }
+                }
+
+                val currentSettings = app.prefs.load()
+                if (currentSettings.hcnsKey.isBlank() || currentSettings.youKey.isBlank()) {
+                    Chip(
+                        if (currentSettings.hcnsKey.isBlank()) "کلید hcnsec وارد نشده است (کلیک برای تنظیمات)"
+                        else "کلید You.com وارد نشده (فقط از PDF استفاده می‌شود)",
+                        if (currentSettings.hcnsKey.isBlank()) RedErr else OrangeWarn,
+                        onClick = onOpenSettings
+                    )
+                }
+
+                BigButton(
+                    text = if (batchGenerating) batchProgressText.ifBlank { "در حال تولید..." }
+                    else "سرچ You.com + طراحی همه پیام‌ها (${drafts.size})",
+                    loading = batchGenerating,
+                    enabled = drafts.isNotEmpty(),
+                    icon = Icons.Default.AutoAwesome,
+                    modifier = Modifier.testTag("campaign_generate_all")
+                ) {
+                    generateBatch(drafts.map { it.key })
+                }
+
+                if (batchGenerating) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                genError?.let { Chip(it, RedErr) }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                drafts.forEach { item ->
+                    DraftReviewCard(
+                        item = item,
+                        companySummary = contextsMap[item.domain]?.summary.orEmpty(),
+                        onStyle = { st -> updateDraft(item.key) { it.copy(style = st) } },
+                        onSubject = { v -> updateDraft(item.key) { it.copy(subject = v) } },
+                        onPreheader = { v -> updateDraft(item.key) { it.copy(preheader = v) } },
+                        onBody = { v -> updateDraft(item.key) { it.copy(body = v) } },
+                        onRegenerate = { generateBatch(listOf(item.key)) },
+                        onApprove = {
+                            scope.launch {
+                                val err = approveSingleDraft(item)
+                                if (err != null) genError = err
+                            }
+                        }
+                    )
+                }
+            }
+
+            if (readyToApproveCount > 0) {
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            genError = null
+                            val errs = mutableListOf<String>()
+                            for (d in drafts.filter { it.generated && !it.approved && it.quality.passed }) {
+                                approveSingleDraft(d)?.let { errs.add(it) }
+                            }
+                            if (errs.isNotEmpty()) genError = errs.first()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().testTag("campaign_approve_all")
+                ) {
+                    Icon(Icons.Default.DoneAll, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("تأیید یکجای پیام‌های استاندارد ($readyToApproveCount)")
+                }
+            }
+
+            BigButton(
+                text = if (approvedCount > 0) "صف ارسال آماده است ($approvedCount پیام) ←"
+                else "ابتدا پیام‌ها را تولید و تأیید کنید",
+                enabled = approvedCount > 0,
+                icon = Icons.Default.Send,
+                modifier = Modifier.testTag("campaign_go_send")
+            ) {
+                onGoToSend()
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MatchCard(
+    m: DomainMatch,
+    checked: Boolean,
+    onToggle: (Boolean) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        border = BorderStroke(
+            1.dp,
+            if (m.readyForApproval) GreenOk.copy(alpha = 0.35f)
+            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Checkbox(
+                checked = checked,
+                enabled = m.readyForApproval,
+                onCheckedChange = onToggle
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(m.email, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        SubTitle("دامنه: ${m.domain}" + (m.folderName?.let { " • پوشه: $it" } ?: " • پوشه یافت نشد"))
+                    }
+                    if (m.readyForApproval) {
+                        Chip("${m.attachmentNames.size} PDF آماده", GreenOk)
+                    } else {
+                        Chip("ناقص", RedErr)
+                    }
+                }
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    m.report?.score?.let { Chip("امتیاز $it/100", if (it < 50) RedErr else OrangeWarn) }
+                    m.report?.findings?.let { Chip("$it یافته", MaterialTheme.colorScheme.primary) }
+                    m.bundle.trialAttachments.forEach { pdf ->
+                        val sizeMb = String.format(java.util.Locale.US, "%.2f MB", pdf.sizeBytes / (1024.0 * 1024.0))
+                        Chip("${pdf.name} (${pdf.pages ?: "?"} ص • $sizeMb)", GreenOk)
+                    }
+                }
+
+                m.warnings.take(2).forEach { w ->
+                    SubTitle("• $w", color = OrangeWarn)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DraftReviewCard(
+    item: CampaignDraftItem,
+    companySummary: String,
+    onStyle: (String) -> Unit,
+    onSubject: (String) -> Unit,
+    onPreheader: (String) -> Unit,
+    onBody: (String) -> Unit,
+    onRegenerate: () -> Unit,
+    onApprove: () -> Unit
+) {
+    var expanded by remember(item.key, item.generated) { mutableStateOf(!item.approved) }
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            1.dp,
+            when {
+                item.approved -> GreenOk.copy(alpha = 0.55f)
+                item.error != null -> RedErr.copy(alpha = 0.55f)
+                else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+            }
+        ),
+        tonalElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(item.email, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    SubTitle(
+                        item.domain +
+                            (item.subject.takeIf { it.isNotBlank() }?.let { " • $it" } ?: "")
+                    )
+                }
+                when {
+                    item.generating -> Chip(item.statusNote.ifBlank { "در حال تولید..." }, MaterialTheme.colorScheme.primary)
+                    item.approved -> Chip("تأیید شد ✓", GreenOk)
+                    item.generated && item.quality.passed -> Chip("${item.quality.score}/100 ✓", GreenOk)
+                    item.generated -> Chip("${item.quality.score}/100", OrangeWarn)
+                    else -> Chip("در انتظار تولید", MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.width(4.dp))
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null
+                )
+            }
+
+            if (item.generating) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            item.error?.let { Chip(it, RedErr) }
+
+            AnimatedVisibility(visible = expanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Attached 2 newest PDFs preview
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        item.match.bundle.trialAttachments.forEach { pdf ->
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(Icons.Default.AttachFile, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Text(pdf.name, style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+
+                    if (companySummary.isNotBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "تحلیل You.com: " + companySummary.take(220),
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("BUSINESS" to "فروش", "TECHNICAL" to "فنی", "DIRECT" to "مستقیم").forEach { (c, l) ->
+                            FilterChip(
+                                selected = item.style == c,
+                                onClick = { onStyle(c) },
+                                label = { Text(l) }
+                            )
+                        }
+                    }
+
+                    LabeledField("موضوع ایمیل (Subject)", item.subject, onChange = onSubject)
+
+                    if (item.subjectAlternatives.isNotEmpty()) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            item.subjectAlternatives.take(3).forEach { alt ->
+                                FilterChip(
+                                    selected = item.subject == alt,
+                                    onClick = { onSubject(alt) },
+                                    label = { Text(alt.take(34), fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                    }
+
+                    LabeledField("پیش‌نمایش ایمیل (Preheader)", item.preheader, onChange = onPreheader)
+                    LabeledField("متن ایمیل بازاریابی", item.body, multiline = true, onChange = onBody)
+
+                    if (item.generated) {
+                        item.quality.blockers.forEach { SubTitle("⛔ $it", color = RedErr) }
+                        item.quality.issues.take(2).forEach { SubTitle("• $it", color = OrangeWarn) }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onRegenerate,
+                            enabled = !item.generating,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(if (item.generated) "تولید مجدد" else "تولید تکی")
+                        }
+                        Button(
+                            onClick = onApprove,
+                            enabled = item.generated && item.quality.passed &&
+                                item.subject.isNotBlank() && item.body.isNotBlank() &&
+                                item.match.attachmentUris.isNotEmpty() && !item.approved,
+                            modifier = Modifier.weight(1.3f)
+                        ) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (item.approved) "تأییدشده" else "تأیید و ارسال به صف")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

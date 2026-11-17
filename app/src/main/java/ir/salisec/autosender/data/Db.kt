@@ -2,6 +2,7 @@ package ir.salisec.autosender.data
 
 import androidx.room.Dao
 import androidx.room.Database
+import androidx.room.Delete
 import androidx.room.Entity
 import androidx.room.Insert
 import androidx.room.PrimaryKey
@@ -9,7 +10,6 @@ import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Update
 import androidx.room.Upsert
-import androidx.room.Delete
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
@@ -22,13 +22,12 @@ data class MessageEntity(
     val subject: String = "",
     val body: String = "",
     val preheader: String = "",
-    /** ONLY the two trial PDF URIs, separated by "||". */
+    /** Up to 2 newest PDF URIs, separated by "||". */
     val pdfPaths: String = "",
-    /** Exact file names of those two trial PDFs (send-time guard). */
+    /** Exact file names of the attached PDFs. */
     val attachmentNames: String = "",
-    /** Page count of each trial PDF ("2||2"); verified again before sending. */
+    /** Page count of each PDF; verified again before sending. */
     val attachmentPages: String? = null,
-
     /** Full SHA-256 of each approved PDF, joined by "||". */
     val attachmentSha256: String? = null,
     /** Hash of the evidence pack the copy was grounded on. */
@@ -74,7 +73,7 @@ data class CampaignEntity(
 
 @Dao
 interface MessageDao {
-    @Query("SELECT * FROM messages ORDER BY id ASC")
+    @Query("SELECT * FROM messages ORDER BY id DESC")
     suspend fun all(): List<MessageEntity>
 
     @Query("SELECT COUNT(*) FROM messages WHERE status IN ('APPROVED','QUEUED')")
@@ -126,6 +125,7 @@ interface MessageDao {
     @Insert suspend fun insert(m: MessageEntity): Long
     @Update suspend fun update(m: MessageEntity)
     @Delete suspend fun delete(m: MessageEntity)
+    @Query("DELETE FROM messages WHERE status = 'DRAFT'") suspend fun clearDrafts()
     @Query("DELETE FROM messages") suspend fun clearAll()
 }
 
@@ -160,11 +160,6 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun campaignDao(): CampaignDao
 }
 
-/**
- * Real forward migration 2 -> 3. New columns are NULLABLE so the ALTER TABLE
- * statements match Room's generated schema exactly (no DEFAULT mismatch).
- * Report bodies / PDF text are deliberately NOT stored in the campaigns table.
- */
 val MIGRATION_2_3 = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE messages ADD COLUMN attachmentPages TEXT")
@@ -181,7 +176,6 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
-/** Adds the approval-time attachment hashes. Existing messages have no hash and must be re-approved. */
 val MIGRATION_3_4 = object : Migration(3, 4) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE messages ADD COLUMN attachmentSha256 TEXT")

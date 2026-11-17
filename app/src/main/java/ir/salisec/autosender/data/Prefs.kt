@@ -18,14 +18,18 @@ data class Settings(
     // hcnsec (OpenAI-compatible)
     val hcnsKey: String = "",
     val hcnsEndpoint: String = HCNS_CHAT_ENDPOINT,
-    val hcnsModel: String = "gpt-4o-mini",
+    val hcnsModel: String = "",
     val hcnsReviewModel: String = "",
+    val autoSelectBestModel: Boolean = true,
+    val hcnsModelVerified: Boolean = false,
+    val hcnsAvailableModels: String = "",
     val enableCriticPass: Boolean = true,
     val maxAiCallsPerEmail: Int = 3,
     // You.com (public business context only)
     val youKey: String = "",
     val youEndpoint: String = YOU_SEARCH_ENDPOINT,
     val youCount: Int = 5,
+    val youVerified: Boolean = false,
     // sending: BREVO_API or SMTP
     val sendMode: String = "BREVO_API",
     val brevoKey: String = "",
@@ -43,16 +47,12 @@ data class Settings(
     val jitterSeconds: Int = 25,
     val dailyCap: Int = 100,
     // attachment policy
-    /** Kept for settings compatibility; the exact-two-trial rule is now
-     *  unconditional in AttachmentGuard and CANNOT be disabled. */
     val enforceTrialAttachments: Boolean = true,
-    /** Per-file cap in MB. Brevo documents < 4 MB per attachment and a 20 MB
-     *  total email limit; the guard enforces both. */
     val maxAttachmentMb: Int = 4,
     val unsubscribeFooter: String = "اگر تمایلی به دریافت این گزارش‌ها ندارید، کافی است با واژه «حذف» پاسخ دهید؛ بلافاصله از فهرست حذف می‌شوید.",
     // suppression list (opt-out honouring), comma-separated emails and domains
     val suppressed: String = "",
-    // folders
+    // persistent SAF URI to /storage/emulated/0/sitest
     val sitestFolderUri: String = ""
 )
 
@@ -71,14 +71,18 @@ class Prefs(context: Context) {
         replyTo = sp.getString("replyTo", "")!!,
         signature = sp.getString("signature", "SaliSecure Security Research Team\nhttps://salisec.ir")!!,
         hcnsKey = sp.getString("hcnsKey", "")!!,
-        hcnsEndpoint = sp.getString("hcnsEndpoint", HCNS_CHAT_ENDPOINT)!!.ifBlank { HCNS_CHAT_ENDPOINT },
-        hcnsModel = sp.getString("hcnsModel", "gpt-4o-mini")!!.ifBlank { "gpt-4o-mini" },
+        hcnsEndpoint = normalizeHcnsEndpoint(sp.getString("hcnsEndpoint", HCNS_CHAT_ENDPOINT)),
+        hcnsModel = sp.getString("hcnsModel", "")!!,
         hcnsReviewModel = sp.getString("hcnsReviewModel", "")!!,
+        autoSelectBestModel = sp.getBoolean("autoSelectBestModel", true),
+        hcnsModelVerified = sp.getBoolean("hcnsModelVerified", false),
+        hcnsAvailableModels = sp.getString("hcnsAvailableModels", "")!!,
         enableCriticPass = sp.getBoolean("enableCriticPass", true),
         maxAiCallsPerEmail = sp.getInt("maxAiCallsPerEmail", 3),
         youKey = sp.getString("youKey", "")!!,
         youEndpoint = migrateYouEndpoint(sp.getString("youEndpoint", YOU_SEARCH_ENDPOINT)),
         youCount = sp.getInt("youCount", 5),
+        youVerified = sp.getBoolean("youVerified", false),
         sendMode = sp.getString("sendMode", "BREVO_API")!!,
         brevoKey = sp.getString("brevoKey", "")!!,
         smtpHost = sp.getString("smtpHost", "")!!,
@@ -101,28 +105,32 @@ class Prefs(context: Context) {
 
     fun save(s: Settings) {
         sp.edit()
-            .putString("fromName", s.fromName)
-            .putString("fromEmail", s.fromEmail)
-            .putString("replyTo", s.replyTo)
+            .putString("fromName", s.fromName.trim())
+            .putString("fromEmail", s.fromEmail.trim())
+            .putString("replyTo", s.replyTo.trim())
             .putString("signature", s.signature)
-            .putString("hcnsKey", s.hcnsKey)
-            .putString("hcnsEndpoint", s.hcnsEndpoint)
-            .putString("hcnsModel", s.hcnsModel)
-            .putString("hcnsReviewModel", s.hcnsReviewModel)
+            .putString("hcnsKey", s.hcnsKey.trim())
+            .putString("hcnsEndpoint", normalizeHcnsEndpoint(s.hcnsEndpoint))
+            .putString("hcnsModel", s.hcnsModel.trim())
+            .putString("hcnsReviewModel", s.hcnsReviewModel.trim())
+            .putBoolean("autoSelectBestModel", s.autoSelectBestModel)
+            .putBoolean("hcnsModelVerified", s.hcnsModelVerified)
+            .putString("hcnsAvailableModels", s.hcnsAvailableModels)
             .putBoolean("enableCriticPass", s.enableCriticPass)
             .putInt("maxAiCallsPerEmail", s.maxAiCallsPerEmail)
-            .putString("youKey", s.youKey)
+            .putString("youKey", s.youKey.trim())
             .putString("youEndpoint", migrateYouEndpoint(s.youEndpoint))
             .putInt("youCount", s.youCount)
+            .putBoolean("youVerified", s.youVerified)
             .putString("sendMode", s.sendMode)
-            .putString("brevoKey", s.brevoKey)
-            .putString("smtpHost", s.smtpHost)
+            .putString("brevoKey", s.brevoKey.trim())
+            .putString("smtpHost", s.smtpHost.trim())
             .putInt("smtpPort", s.smtpPort)
-            .putString("smtpUser", s.smtpUser)
+            .putString("smtpUser", s.smtpUser.trim())
             .putString("smtpPass", s.smtpPass)
-            .putString("imapHost", s.imapHost)
+            .putString("imapHost", s.imapHost.trim())
             .putInt("imapPort", s.imapPort)
-            .putString("imapUser", s.imapUser)
+            .putString("imapUser", s.imapUser.trim())
             .putString("imapPass", s.imapPass)
             .putInt("delaySeconds", s.delaySeconds)
             .putInt("jitterSeconds", s.jitterSeconds)
@@ -132,23 +140,32 @@ class Prefs(context: Context) {
             .putString("unsubscribeFooter", s.unsubscribeFooter)
             .putString("suppressed", s.suppressed)
             .putString("sitestFolderUri", s.sitestFolderUri)
-            .apply()
+            .commit()
     }
 
-    /** PRIVACY.md "delete all data": wipes every encrypted setting (including
-     *  API keys, IMAP credentials and the suppression list). The master key
-     *  itself is removed by Android when the app data is cleared. */
+    /** PRIVACY.md "delete all data": wipes every encrypted setting. */
     fun clear() {
         sp.edit().clear().commit()
     }
 
-    /** Legacy endpoint from older builds -> current documented You.com Search API. */
+    private fun normalizeHcnsEndpoint(v: String?): String {
+        val value = v?.trim().orEmpty()
+        return when {
+            value.isBlank() -> HCNS_CHAT_ENDPOINT
+            value.endsWith("/chat/completions") -> value
+            value.endsWith("/v1") -> "$value/chat/completions"
+            value.endsWith("/v1/") -> "${value}chat/completions"
+            !value.contains("/v1/") -> "${value.trimEnd('/')}/v1/chat/completions"
+            else -> value
+        }
+    }
+
     private fun migrateYouEndpoint(v: String?): String {
         val value = v?.trim().orEmpty()
         return when {
             value.isBlank() -> YOU_SEARCH_ENDPOINT
             value.contains("api.youdotcom.ai") -> YOU_SEARCH_ENDPOINT
-            value.contains("api.ydc-index.io") -> "https://ydc-index.io/v1/search"
+            value.contains("api.ydc-index.io") -> YOU_SEARCH_ENDPOINT
             else -> value
         }
     }
@@ -170,7 +187,7 @@ class Prefs(context: Context) {
         val e = entry.trim().lowercase()
         if (e.isEmpty()) return
         val next = (suppressedSet() + e).joinToString(",")
-        sp.edit().putString("suppressed", next).apply()
+        sp.edit().putString("suppressed", next).commit()
     }
 
     companion object {

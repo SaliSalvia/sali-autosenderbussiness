@@ -2,12 +2,8 @@ package ir.salisec.autosender.ui
 
 sealed class Screen {
     object Home : Screen()
-    object Settings : Screen()
-    object Domains : Screen()
-    object Contacts : Screen()
-    object Reports : Screen()
-    object Generate : Screen()
+    object Campaign : Screen()
     object Send : Screen()
-    object Inbox : Screen()
-    object Pipeline : Screen()
+    object PipelineInbox : Screen()
+    object Settings : Screen()
 }

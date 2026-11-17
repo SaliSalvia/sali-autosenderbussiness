@@ -47,7 +47,7 @@ data class LogEntry(
     val message: String
 )
 
-/** Outbound message handed to a MailSender. `attachments` MUST be the 2 trial PDFs. */
+/** Outbound message handed to a MailSender. `attachments` holds up to 2 newest PDFs. */
 data class OutgoingMessage(
     val to: String,
     val subject: String,
@@ -64,24 +64,27 @@ data class OutgoingMessage(
 fun MessageEntity.pageCounts(): List<Int?> =
     (attachmentPages ?: "").split("||").map { it.trim().toIntOrNull() }
 
-/** Match of a domain to its report folder.
- *  `bundle.pdfs` = every PDF (AI reads them all).
- *  `bundle.trialAttachments` = the only files allowed to be sent. */
+/** Match of an email/domain to its report folder in sitest.
+ *  `bundle.pdfs` = read by the AI.
+ *  `bundle.trialAttachments` = the up-to-2 newest PDFs attached to the email. */
 data class DomainMatch(
     val domain: String,
+    val email: String = "",
+    val contactName: String? = null,
     val folderName: String?,
     val bundle: ReportBundle,
     val report: ReportData?,
     val hasEmail: Boolean
 ) {
-    /** All PDF URIs in the folder - read by the AI, never attached wholesale. */
+    /** Key unique per recipient when multiple emails share a domain, or domain otherwise. */
+    val key: String get() = email.ifBlank { domain }
     val pdfFiles: List<String> get() = bundle.pdfs.map { it.uri }
     val attachmentUris: List<String> get() = bundle.trialAttachments.map { it.uri }
     val attachmentNames: List<String> get() = bundle.trialAttachments.map { it.name }
     val warnings: List<String> get() = bundle.warnings
     val pdfCount: Int get() = bundle.pdfs.size
     val readyForApproval: Boolean
-        get() = report != null && hasEmail && attachmentUris.size == 2 && bundle.pdfs.isNotEmpty()
+        get() = hasEmail && attachmentUris.isNotEmpty() && bundle.pdfs.isNotEmpty()
 }
 
 /** Real, aggregate benchmark computed from the user's own scanned reports. */

@@ -54,4 +54,23 @@ class ContactsParserTest {
         assertFalse(ContactsParser.validateEmail("a@b"))
         assertFalse(ContactsParser.validateEmail("plain text"))
     }
+
+    @Test
+    fun parsesPlainEmailListAndAngleBracketFormat() {
+        val raw = """
+            ceo@inchand.com
+            info@numberland.ir, sales@example.org
+            Ali Reza <ali@company.ir>
+            sarah@beta.com, Sarah
+        """.trimIndent()
+        val list = ContactsParser.parse(raw)
+        assertEquals(5, list.size)
+        assertEquals("inchand.com", list[0].domain)
+        assertEquals("numberland.ir", list[1].domain)
+        assertEquals("example.org", list[2].domain)
+        assertEquals("Ali Reza", list[3].name)
+        assertEquals("company.ir", list[3].domain)
+        assertEquals("Sarah", list[4].name)
+        assertEquals("beta.com", list[4].domain)
+    }
 }

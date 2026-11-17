@@ -2,64 +2,61 @@ package ir.salisec.autosender.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Red line: AI reads every PDF, but only the two 2-page trials can be attached. */
+/** Verifies newest-2-PDF attachment selection matching sitest/<domain>/ layouts. */
 class AttachmentPolicyTest {
 
-    private val fa = PdfDoc("acme_trial_fa.pdf", "content://fa", pages = 2, text = "fa")
-    private val en = PdfDoc("acme_trial_en.pdf", "content://en", pages = 2, text = "en")
-    private val full = PdfDoc("acme_full_report.pdf", "content://full", pages = 48, text = "full")
-    private val scan = PdfDoc("acme_scan.pdf", "content://scan", pages = 31, text = "scan")
+    private val newestFa = PdfDoc("2026-11-14_13-06_trial_fa.pdf", "content://fa2", pages = 2, lastModified = 1000L)
+    private val newestEn = PdfDoc("2026-11-14_13-06_trial.pdf", "content://en2", pages = 2, lastModified = 1000L)
+    private val olderExec = PdfDoc("2026-11-13_00-10_executive_fa.pdf", "content://exec1", pages = 2, lastModified = 900L)
+    private val olderScan = PdfDoc("2026-11-10_09-00_trial.pdf", "content://old", pages = 2, lastModified = 500L)
 
     @Test
-    fun selectsExactlyOneFarsiAndOneEnglishTrial() {
-        val pair = AttachmentPolicy.selectTrialPair(listOf(scan, full, fa, en))
+    fun selectsTwoNewestPdfsWhenMoreThanTwoExist() {
+        val pair = AttachmentPolicy.selectTrialPair(listOf(olderScan, olderExec, newestEn, newestFa))
         assertEquals(2, pair.size)
-        assertEquals("acme_trial_fa.pdf", pair[0].name)
-        assertEquals("acme_trial_en.pdf", pair[1].name)
+        assertEquals(
+            setOf("2026-11-14_13-06_trial_fa.pdf", "2026-11-14_13-06_trial.pdf"),
+            pair.map { it.name }.toSet()
+        )
     }
 
     @Test
-    fun neverAttachesTheFullPaidReport() {
-        val pair = AttachmentPolicy.selectTrialPair(listOf(full))
-        assertTrue(pair.isEmpty())
-        assertTrue(AttachmentPolicy.isFullName("report_full.pdf"))
-        assertTrue(AttachmentPolicy.isFullName("نسخه کامل.pdf"))
+    fun ordersByLastModifiedWhenNoFilenameTimestampExists() {
+        val a = PdfDoc("report_v1.pdf", "content://a", lastModified = 100L)
+        val b = PdfDoc("report_v2.pdf", "content://b", lastModified = 300L)
+        val c = PdfDoc("report_v3.pdf", "content://c", lastModified = 200L)
+        val pair = AttachmentPolicy.selectTrialPair(listOf(a, b, c))
+        assertEquals(listOf("report_v2.pdf", "report_v3.pdf"), pair.map { it.name })
     }
 
     @Test
-    fun aTrialFileWithWrongPageCountIsStillClassifiedButRejectedAtSendTime() {
-        val wrong = PdfDoc("acme_trial_fa.pdf", "u", pages = 9, text = "x")
-        assertTrue(AttachmentPolicy.isTrialName(wrong.name))
-        assertTrue(AttachmentPolicy.isPersianName("acme_trial_fa.pdf"))
-        assertFalse(AttachmentPolicy.isPersianName("acme_trial_en.pdf"))
+    fun singlePdfInFolderStillQualifies() {
+        val single = PdfDoc("2026-11-14_13-06_trial_fa.pdf", "content://single", pages = 2)
+        val pair = AttachmentPolicy.selectTrialPair(listOf(single))
+        assertEquals(1, pair.size)
+        assertEquals("2026-11-14_13-06_trial_fa.pdf", pair[0].name)
     }
 
     @Test
-    fun nameGuardIsUnconditional() {
-        assertTrue(AttachmentGuard.validateNames(listOf(fa.name, en.name)) == null)
-        assertTrue(AttachmentGuard.validateNames(listOf(fa.name)) != null)
-        assertTrue(AttachmentGuard.validateNames(listOf(fa.name, full.name)) != null)
-        assertTrue(AttachmentGuard.validateNames(listOf(fa.name, "acme_trial_fa_2.pdf")) != null)
-        assertTrue(AttachmentGuard.validateNames(listOf(fa.name, "acme_trial_en.txt")) != null)
-    }
-
-
-    @Test
-    fun unmarkedLanguageFilesNeverQualifyAsTrials() {
-        val unmarked = PdfDoc("acme_trial.pdf", "content://unmarked", pages = 2, text = "x")
-        assertTrue(AttachmentPolicy.isTrialName(unmarked.name))
-        assertFalse(AttachmentPolicy.isPersianName(unmarked.name))
-        assertFalse(AttachmentPolicy.isEnglishName(unmarked.name))
-        assertTrue(AttachmentPolicy.selectTrialPair(listOf(unmarked)).isEmpty())
-    }
-
-    @Test
-    fun englishTrialsAreDetectedExplicitly() {
+    fun detectsEnglishVariantWithoutExplicitEnSuffix() {
+        assertTrue(AttachmentPolicy.isEnglishName("2026-11-09_18-46_trial.pdf"))
         assertTrue(AttachmentPolicy.isEnglishName("acme_trial_en.pdf"))
-        assertTrue(AttachmentPolicy.isEnglishName("acme_trial_english.pdf"))
-        assertFalse(AttachmentPolicy.isEnglishName("acme_trial_fa.pdf"))
+        assertTrue(AttachmentPolicy.isPersianName("2026-11-09_18-46_trial_fa.pdf"))
+        assertFalse(AttachmentPolicy.isEnglishName("2026-11-09_18-46_trial_fa.pdf"))
+        assertFalse(AttachmentPolicy.isPersianName("2026-11-09_18-46_trial.pdf"))
+    }
+
+    @Test
+    fun nameGuardEnforcesOneToTwoPdfFiles() {
+        assertNull(AttachmentGuard.validateNames(listOf(newestFa.name, newestEn.name)))
+        assertNull(AttachmentGuard.validateNames(listOf(newestFa.name)))
+        assertNotNull(AttachmentGuard.validateNames(emptyList()))
+        assertNotNull(AttachmentGuard.validateNames(listOf(newestFa.name, newestEn.name, olderExec.name)))
+        assertNotNull(AttachmentGuard.validateNames(listOf(newestFa.name, "not_a_pdf.txt")))
     }
 }

@@ -1,36 +1,21 @@
 package ir.salisec.autosender.data
 
 /**
- * Fail-closed validation of the two exact PDF byte arrays that will be sent.
+ * Fail-closed validation of the PDF byte arrays that will be sent.
  * Page counts and hashes must come from parsing these actual bytes immediately
  * before the provider request.
  */
 object AttachmentGuard {
     const val MAX_PER_FILE_BYTES = 4L * 1024L * 1024L
     const val MAX_TOTAL_BYTES = 20L * 1024L * 1024L
-    const val EXPECTED_PAGES = 2
 
     fun validateNames(names: List<String>): String? {
-        if (names.size != 2) {
-            return "تعداد پیوست ${names.size} است؛ فقط دو نسخهٔ trial مجاز است"
+        if (names.isEmpty() || names.size > 2) {
+            return "تعداد پیوست ${names.size} است؛ حداکثر ۲ فایل PDF مجاز است"
         }
 
         if (names.any { !it.trim().lowercase().endsWith(".pdf") }) {
             return "همهٔ پیوست‌ها باید PDF باشند"
-        }
-
-        if (names.any {
-                !AttachmentPolicy.isTrialName(it) || AttachmentPolicy.isFullName(it)
-            }
-        ) {
-            return "پیوست‌ها باید نسخهٔ trial باشند، نه گزارش کامل"
-        }
-
-        val persianCount = names.count { AttachmentPolicy.isPersianName(it) }
-        val englishCount = names.count { AttachmentPolicy.isEnglishName(it) }
-
-        if (persianCount != 1 || englishCount != 1) {
-            return "نام فایل‌ها باید دقیقاً یک trial فارسی و یک trial انگلیسی را مشخص کند"
         }
 
         return null
@@ -50,11 +35,12 @@ object AttachmentGuard {
     ): String? {
         validateNames(names)?.let { return it }
 
-        if (payloads.size != 2) return "هر دو پیوست باید خوانده شوند"
-        if (approvedPages.size != 2 || actualPages.size != 2) {
-            return "تعداد صفحات هر دو فایل باید قابل تأیید باشد"
+        val count = names.size
+        if (payloads.size != count) return "فایل‌های پیوست به درستی خوانده نشدند"
+        if (approvedPages.size != count || actualPages.size != count) {
+            return "تعداد صفحات فایل‌ها باید قابل تأیید باشد"
         }
-        if (approvedSha256.size != 2 || approvedSha256.any { it.isBlank() }) {
+        if (approvedSha256.size != count || approvedSha256.any { it.isBlank() }) {
             return "هش پیوست‌ها ثبت نشده است؛ پیام را دوباره بررسی و تأیید کنید"
         }
 
@@ -62,7 +48,7 @@ object AttachmentGuard {
         val perFileCap = minOf(MAX_PER_FILE_BYTES, configuredCap)
         var totalBytes = 0L
 
-        for (index in 0..1) {
+        for (index in 0 until count) {
             val bytes = payloads[index]
 
             if (!isPdf(bytes)) {
@@ -79,8 +65,8 @@ object AttachmentGuard {
             val actualPageCount = actualPages[index]
                 ?: return "تعداد صفحات واقعی «${names[index]}» قابل خواندن نیست"
 
-            if (approvedPageCount != EXPECTED_PAGES || actualPageCount != EXPECTED_PAGES) {
-                return "فایل «${names[index]}» باید دقیقاً دو صفحه داشته باشد"
+            if (approvedPageCount <= 0 || actualPageCount <= 0 || approvedPageCount != actualPageCount) {
+                return "تعداد صفحات «${names[index]}» تغییر کرده یا نامعتبر است؛ پیام را دوباره بررسی کنید"
             }
 
             val actualHash = sha256(payloads[index])

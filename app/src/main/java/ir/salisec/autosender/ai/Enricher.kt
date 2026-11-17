@@ -15,56 +15,93 @@ import java.util.concurrent.TimeUnit
 
 /** You.com Search API enrichment: PUBLIC, COMPANY-LEVEL context only.
  *
- *  - one request per domain (cached in memory + campaign session) so the $200 credit is not burned
- *  - never asks for, stores or forwards personal contact data
- *  - documented endpoint: POST https://ydc-index.io/v1/search , header X-API-Key
- *  - failure degrades gracefully: the email is still written from the real PDF evidence */
+ *  - One request per domain (cached in memory when successful)
+ *  - Supports bilingual Persian + English business context queries
+ *  - Never caches transient errors; degrades gracefully */
 class Enricher(private val client: OkHttpClient) {
 
     private val cache = ConcurrentHashMap<String, CompanyContext>()
     private val emailR = Regex("""[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}""")
     private val phoneR = Regex("""\+?[0-9][0-9 ().\-]{7,}[0-9]""")
 
-    fun clearCache() { cache.clear() }
+    fun clearCache() {
+        cache.clear()
+    }
 
-    suspend fun enrich(s: Settings, domain: String): CompanyContext = withContext(Dispatchers.IO) {
-        cache[domain]?.let { return@withContext it }
-        if (s.youKey.isBlank() || s.youEndpoint.isBlank()) {
-            return@withContext CompanyContext(domain, "")
-        }
-        val result = try {
-            val query = "\"$domain\" company industry products services about us -contact -email -phone -jobs"
+    /** Verifies You.com API connectivity & key validity from Settings. */
+    suspend fun testConnection(s: Settings): Result<String> = withContext(Dispatchers.IO) {
+        if (s.youKey.isBlank()) return@withContext Result.failure(IllegalStateException("کلید API سایت You.com وارد نشده است"))
+        try {
             val payload = JSONObject()
-                .put("query", query)
-                .put("count", s.youCount.coerceIn(1, 10))
+                .put("query", "cybersecurity business website")
+                .put("count", 1)
                 .toString()
             val req = Request.Builder()
                 .url(s.youEndpoint)
-                .header("X-API-Key", s.youKey)
+                .header("X-API-Key", s.youKey.trim())
                 .header("Content-Type", "application/json")
                 .post(payload.toRequestBody("application/json".toMediaType()))
                 .build()
-            val resp = client.newBuilder().callTimeout(30, TimeUnit.SECONDS).build().newCall(req).execute()
-            val raw = try {
-                resp.body?.string().orEmpty()
-            } finally {
-                resp.close()
-            }
-            if (!resp.isSuccessful) {
-                CompanyContext(domain, "")
-            } else {
+            val t0 = System.currentTimeMillis()
+            client.newBuilder().callTimeout(20, TimeUnit.SECONDS).build().newCall(req).execute().use { resp ->
+                val dt = System.currentTimeMillis() - t0
+                val raw = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(RuntimeException("خطای You.com HTTP ${resp.code}: ${raw.take(120)}"))
+                }
                 val parsed = parse(raw)
-                CompanyContext(domain, sanitize(parsed.first).take(700), parsed.second)
+                Result.success("اتصال برقرار است (${dt}ms)" + if (parsed.first.isNotBlank()) " ✓" else "")
             }
         } catch (e: Exception) {
-            CompanyContext(domain, "")
+            Result.failure(e)
         }
-        cache[domain] = result
-        result
     }
 
-    /** Returns (joined snippets, source URLs). Handles the documented web/news shape
-     *  plus older/unknown response shapes as a fallback. */
+    suspend fun enrich(s: Settings, domain: String): CompanyContext = withContext(Dispatchers.IO) {
+        val cleanDomain = domain.trim().lowercase()
+        cache[cleanDomain]?.takeIf { it.summary.isNotBlank() }?.let { return@withContext it }
+        if (s.youKey.isBlank() || s.youEndpoint.isBlank()) {
+            return@withContext CompanyContext(cleanDomain, "")
+        }
+
+        // First try targeted bilingual business query; fallback to clean domain query if empty
+        val primaryQuery = "\"$cleanDomain\" (about OR services OR products OR company OR درباره OR خدمات OR محصولات)"
+        val first = runSearch(s, primaryQuery)
+        val finalPair = if (first != null && first.first.isNotBlank()) {
+            first
+        } else {
+            runSearch(s, "\"$cleanDomain\"")
+        }
+
+        val ctx = if (finalPair != null && finalPair.first.isNotBlank()) {
+            CompanyContext(cleanDomain, sanitize(finalPair.first).take(900), finalPair.second).also {
+                cache[cleanDomain] = it
+            }
+        } else {
+            CompanyContext(cleanDomain, "")
+        }
+        ctx
+    }
+
+    private fun runSearch(s: Settings, query: String): Pair<String, List<String>>? = try {
+        val payload = JSONObject()
+            .put("query", query)
+            .put("count", s.youCount.coerceIn(1, 10))
+            .toString()
+        val req = Request.Builder()
+            .url(s.youEndpoint)
+            .header("X-API-Key", s.youKey.trim())
+            .header("Content-Type", "application/json")
+            .post(payload.toRequestBody("application/json".toMediaType()))
+            .build()
+        client.newBuilder().callTimeout(30, TimeUnit.SECONDS).build().newCall(req).execute().use { resp ->
+            val raw = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) null else parse(raw)
+        }
+    } catch (e: Exception) {
+        null
+    }
+
     private fun parse(text: String): Pair<String, List<String>> {
         val chunks = mutableListOf<String>()
         val sources = mutableListOf<String>()
@@ -81,7 +118,7 @@ class Enricher(private val client: OkHttpClient) {
                     val snips = o.optJSONArray("snippets")?.let { a ->
                         (0 until minOf(a.length(), 4)).joinToString(" ") { a.optString(it, "") }
                     }.orEmpty()
-                    val line = listOf(title, desc, snips).filter { it.length > 12 }.joinToString(" — ")
+                    val line = listOf(title, desc, snips).filter { it.length > 10 }.joinToString(" — ")
                     if (line.isNotBlank()) chunks.add(line)
                     o.optString("url", "").takeIf { it.startsWith("http") }?.let { sources.add(it) }
                 }
@@ -95,7 +132,7 @@ class Enricher(private val client: OkHttpClient) {
                 // leave empty
             }
         }
-        return chunks.distinct().filter { it.length > 30 }.take(3).joinToString(" | ") to
+        return chunks.distinct().filter { it.length > 20 }.take(4).joinToString(" | ") to
             sources.distinct().take(3)
     }
 

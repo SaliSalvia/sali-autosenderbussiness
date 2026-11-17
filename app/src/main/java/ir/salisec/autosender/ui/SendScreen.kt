@@ -3,16 +3,27 @@ package ir.salisec.autosender.ui
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Outbox
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -23,13 +34,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -39,19 +54,24 @@ import ir.salisec.autosender.data.MessageEntity
 import ir.salisec.autosender.data.PrivacyRedactor
 import ir.salisec.autosender.send.MessageState
 import ir.salisec.autosender.send.SendService
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** Queue console: statuses, pause/resume/cancel, live log, PII-free export. */
 @Composable
-fun SendScreen(app: App, onBack: () -> Unit) {
+fun SendScreen(app: App, onOpenSettings: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by app.engine.state.collectAsState()
     var queue by remember { mutableStateOf(listOf<MessageEntity>()) }
     var showSendConfirm by remember { mutableStateOf(false) }
+    var nowTick by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    val settings = remember(state.running) { app.prefs.load() }
+    val senderConfigured = settings.fromEmail.isNotBlank() &&
+        (if (settings.sendMode == "BREVO_API") settings.brevoKey.isNotBlank() else settings.smtpHost.isNotBlank())
 
     fun reload() {
         scope.launch {
@@ -63,8 +83,20 @@ fun SendScreen(app: App, onBack: () -> Unit) {
             }
         }
     }
-    LaunchedEffect(Unit) { reload() }
+
+    LaunchedEffect(Unit) {
+        app.engine.refreshLogs()
+        reload()
+    }
     LaunchedEffect(state.sent, state.failed, state.skipped, state.running) { reload() }
+
+    // Live 1-second countdown ticker while waiting between sends
+    LaunchedEffect(state.waitingUntil) {
+        while (state.waitingUntil != null) {
+            nowTick = System.currentTimeMillis()
+            delay(1000)
+        }
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/plain")
@@ -73,8 +105,6 @@ fun SendScreen(app: App, onBack: () -> Unit) {
             scope.launch {
                 val logs = app.db.logDao().recent().reversed()
                 val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-                // Operational events only. Recipient addresses are masked at write
-                // time (PrivacyRedactor) and never included in an export.
                 val text = logs.joinToString("\n") { l ->
                     fmt.format(Date(l.ts)) + " | " + (if (l.ok) "OK" else "FAIL") +
                         " | " + l.domain + " | " + PrivacyRedactor.redact(l.message)
@@ -89,90 +119,136 @@ fun SendScreen(app: App, onBack: () -> Unit) {
     }
 
     ScreenScaffold {
-        Title(stringResource(R.string.send_title))
         SubTitle(stringResource(R.string.send_subtitle))
 
-        Section(stringResource(R.string.send_status)) {
-            Text(
-                stringResource(R.string.home_queue) + ": $pending  |  " +
-                    stringResource(R.string.status_sent) + ": ${state.sent}  |  " +
-                    stringResource(R.string.status_failed) + ": ${state.failed}  |  " +
-                    stringResource(R.string.status_skipped) + ": ${state.skipped}"
+        if (!senderConfigured) {
+            Chip(
+                "تنظیمات فرستنده (ایمیل + Brevo/SMTP) کامل نیست — کلیک برای تنظیم",
+                OrangeWarn,
+                onClick = onOpenSettings
             )
-            Text(stringResource(R.string.send_today) + ": ${state.sentToday}")
+        }
+
+        state.errorNotice?.let { Chip(it, RedErr, onClick = onOpenSettings) }
+
+        Section(
+            header = stringResource(R.string.send_status),
+            icon = Icons.Default.Outbox,
+            badge = if (state.running) (if (state.paused) "متوقف" else "فعال") else "$pending آماده",
+            badgeColor = if (state.running && !state.paused) GreenOk else OrangeWarn
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                StatChip("در صف", pending.toString(), MaterialTheme.colorScheme.primary, Modifier.weight(1f))
+                StatChip("ارسال", state.sent.toString(), GreenOk, Modifier.weight(1f))
+                StatChip("ناموفق", state.failed.toString(), RedErr, Modifier.weight(1f))
+                StatChip("امروز", state.sentToday.toString(), MaterialTheme.colorScheme.tertiary, Modifier.weight(1f))
+            }
+
             if (state.running) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Chip(
-                    if (state.paused) stringResource(R.string.send_paused)
-                    else stringResource(R.string.send_sending),
-                    if (state.paused) OrangeWarn else GreenOk
-                )
                 state.currentDomain?.let { SubTitle(stringResource(R.string.home_current) + ": $it") }
                 state.waitingUntil?.let { w ->
-                    val remain = ((w - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
-                    SubTitle(stringResource(R.string.send_waiting) + " $remain " + "ثانیه دیگر")
+                    val remain = ((w - nowTick) / 1000).coerceAtLeast(0)
+                    Chip(stringResource(R.string.send_waiting) + " $remain ثانیه دیگر", MaterialTheme.colorScheme.primary)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (state.paused) Button(onClick = { app.engine.resume() }) {
-                        Text(stringResource(R.string.send_resume))
-                    } else Button(onClick = { app.engine.pause() }) {
-                        Text(stringResource(R.string.send_pause))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (state.paused) {
+                        Button(onClick = { app.engine.resume() }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.send_resume))
+                        }
+                    } else {
+                        Button(onClick = { app.engine.pause() }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.send_pause))
+                        }
                     }
-                    OutlinedButton(onClick = { app.engine.cancel() }) {
+                    OutlinedButton(onClick = { app.engine.cancel() }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.Cancel, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
                         Text(stringResource(R.string.send_cancel))
                     }
                 }
             } else {
-                Button(
-                    onClick = { showSendConfirm = true },
+                BigButton(
+                    text = if (pending > 0) stringResource(R.string.send_bulk) + " ($pending)"
+                    else stringResource(R.string.send_bulk_empty),
                     enabled = pending > 0,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
+                    icon = Icons.Default.Send,
+                    modifier = Modifier.testTag("send_start_button")
                 ) {
-                    Text(
-                        if (pending > 0) stringResource(R.string.send_bulk) + " ($pending)"
-                        else stringResource(R.string.send_bulk_empty)
-                    )
+                    showSendConfirm = true
                 }
             }
         }
 
         if (queue.isNotEmpty()) {
-            Section(stringResource(R.string.send_messages)) {
-                LazyColumn(
-                    Modifier.fillMaxWidth().heightIn(max = 360.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(queue.take(100), key = { it.id }) { m ->
+            Section(header = stringResource(R.string.send_messages), icon = Icons.Default.Send) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    queue.take(100).forEach { m ->
                         Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = MaterialTheme.shapes.medium
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
                         ) {
                             Column(
                                 Modifier.fillMaxWidth().padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Row(
                                     Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(m.domain, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                                    Text(m.domain, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                                     StatusChip(m.status)
                                 }
                                 Text(
                                     m.subject.ifBlank { stringResource(R.string.send_no_subject) },
                                     style = MaterialTheme.typography.bodyMedium
                                 )
-                                Text(
-                                    PrivacyRedactor.maskEmail(m.email),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                SubTitle(
+                                    PrivacyRedactor.maskEmail(m.email) +
+                                        if (m.attachmentNames.isNotBlank()) " • پیوست: ${m.attachmentNames.replace("||", " + ")}" else ""
                                 )
                                 if (!m.lastError.isNullOrBlank()) {
                                     Text(
-                                        m.lastError.orEmpty(),
+                                        m.lastError,
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.error
                                     )
+                                }
+                                if (m.status == MessageState.FAILED || m.status == MessageState.UNCERTAIN) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(onClick = {
+                                            scope.launch {
+                                                app.db.messageDao().update(
+                                                    m.copy(
+                                                        status = MessageState.QUEUED,
+                                                        attempts = 0,
+                                                        lastError = null,
+                                                        updatedAt = System.currentTimeMillis()
+                                                    )
+                                                )
+                                                reload()
+                                            }
+                                        }) {
+                                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("تلاش مجدد")
+                                        }
+                                        TextButton(onClick = {
+                                            scope.launch { app.db.messageDao().delete(m); reload() }
+                                        }) { Text("حذف", color = RedErr) }
+                                    }
                                 }
                             }
                         }
@@ -182,34 +258,35 @@ fun SendScreen(app: App, onBack: () -> Unit) {
         }
 
         if (state.logs.isNotEmpty()) {
-            Section(stringResource(R.string.send_activity)) {
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 240.dp)) {
-                    items(state.logs.take(40)) { l ->
+            Section(header = stringResource(R.string.send_activity), icon = Icons.Default.Outbox) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    state.logs.take(40).forEach { l ->
                         val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(l.ts))
                         Text(
                             "$time  ${if (l.ok) "✓" else "!"}  ${l.domain}  ${l.email}  —  ${l.message}",
                             fontSize = 12.sp,
-                            color = if (l.ok) MaterialTheme.colorScheme.onSurface
-                            else MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(vertical = 3.dp)
+                            color = if (l.ok) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
                         )
                     }
                 }
             }
         }
-        OutlinedButton(onClick = {
-            exportLauncher.launch("sali-send-log-${System.currentTimeMillis()}.txt")
-        }) { Text(stringResource(R.string.send_export)) }
-        TextButton(onClick = onBack) { Text(stringResource(R.string.send_back)) }
+
+        OutlinedButton(
+            onClick = { exportLauncher.launch("sali-send-log-${System.currentTimeMillis()}.txt") },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(stringResource(R.string.send_export))
+        }
     }
 
     if (showSendConfirm) {
         AlertDialog(
             onDismissRequest = { showSendConfirm = false },
             title = { Text(stringResource(R.string.send_confirm_title)) },
-            text = {
-                Text(stringResource(R.string.send_confirm_body) + " ($pending)")
-            },
+            text = { Text(stringResource(R.string.send_confirm_body) + " ($pending)") },
             confirmButton = {
                 Button(onClick = {
                     showSendConfirm = false
@@ -224,6 +301,24 @@ fun SendScreen(app: App, onBack: () -> Unit) {
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun StatChip(label: String, value: String, color: androidx.compose.ui.graphics.Color, modifier: Modifier = Modifier) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = color.copy(alpha = 0.12f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.28f)),
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = color)
+            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
