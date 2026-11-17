@@ -292,6 +292,7 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
                                                         updatedAt = System.currentTimeMillis()
                                                     )
                                                 )
+                                                app.engine.notifyQueueChanged()
                                                 reload()
                                             }
                                         }) {
@@ -300,7 +301,11 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
                                             Text("تلاش مجدد")
                                         }
                                         TextButton(onClick = {
-                                            scope.launch { app.db.messageDao().delete(m); reload() }
+                                            scope.launch {
+                                                app.db.messageDao().delete(m)
+                                                app.engine.notifyQueueChanged()
+                                                reload()
+                                            }
                                         }) { Text("حذف", color = RedErr) }
                                     }
                                 }

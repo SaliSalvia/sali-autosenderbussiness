@@ -93,6 +93,7 @@ fun AppShell(app: App) {
     var previousTab by remember { mutableStateOf<Screen>(Screen.Home) }
     var pendingCount by remember { mutableIntStateOf(0) }
     val sendState by app.engine.state.collectAsState()
+    val queueVersion by app.engine.queueVersion.collectAsState()
 
     fun navigate(target: Screen) {
         if (target != Screen.Settings && target != Screen.EmailSetup) {
@@ -103,6 +104,7 @@ fun AppShell(app: App) {
 
     LaunchedEffect(
         current,
+        queueVersion,
         sendState.sent,
         sendState.failed,
         sendState.skipped,

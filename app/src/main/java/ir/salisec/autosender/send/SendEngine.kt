@@ -110,8 +110,14 @@ class SendEngine(
 
     private val _state = MutableStateFlow(SendState())
     val state: StateFlow<SendState> = _state
+    private val _queueVersion = MutableStateFlow(0L)
+    val queueVersion: StateFlow<Long> = _queueVersion
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
+
+    fun notifyQueueChanged() {
+        _queueVersion.value = _queueVersion.value + 1L
+    }
 
     @Volatile
     private var cancelRequested = false
@@ -135,6 +141,7 @@ class SendEngine(
 
     /** Enqueues resilient WorkManager queue execution (with network constraint & business-hours scheduling). */
     fun enqueueWork(initialDelayMs: Long = 0L) {
+        if (_state.value.running) return
         cancelRequested = false
         val s = prefs.load()
         val effectiveDelay = if (initialDelayMs > 0L) initialDelayMs
@@ -159,8 +166,7 @@ class SendEngine(
                 if (effectiveDelay > 0L) setInitialDelay(effectiveDelay, TimeUnit.MILLISECONDS)
             }
             .build()
-        val policy = if (effectiveDelay > 0L) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP
-        WorkManager.getInstance(appContext).enqueueUniqueWork(UNIQUE_WORK_NAME, policy, req)
+        WorkManager.getInstance(appContext).enqueueUniqueWork(UNIQUE_WORK_NAME, ExistingWorkPolicy.REPLACE, req)
     }
 
     /** Sends a preview copy of a draft (plus up to 2 PDF attachments) to the user's OWN email. */
@@ -505,6 +511,7 @@ class SendEngine(
                 updatedAt = System.currentTimeMillis()
             )
         )
+        notifyQueueChanged()
     }
 
     private suspend fun waitWhilePaused() {

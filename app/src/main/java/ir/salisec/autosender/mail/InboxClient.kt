@@ -4,8 +4,10 @@ import ir.salisec.autosender.data.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Properties
+import javax.mail.FetchProfile
 import javax.mail.Folder
 import javax.mail.Session
+import javax.mail.UIDFolder
 import javax.mail.internet.MimeMessage
 
 data class InboxMessage(
@@ -17,7 +19,8 @@ data class InboxMessage(
     val messageId: String? = null,
     val references: String? = null,
     val isBounce: Boolean = false,
-    val bouncedAddress: String? = null
+    val bouncedAddress: String? = null,
+    val uid: Long = -1L
 )
 
 data class InboxFullMessage(
@@ -27,7 +30,7 @@ data class InboxFullMessage(
     val references: String?
 )
 
-/** IMAP inbox client supporting SSL (993) and STARTTLS (143), with Message-ID, References & bounce parsing. */
+/** IMAP inbox client supporting SSL (993) and STARTTLS (143), with UID lookup, Message-ID, References & bounce parsing. */
 class InboxClient {
 
     private val bounceSenders = listOf("mailer-daemon", "postmaster", "mail delivery subsystem", "bounce")
@@ -66,10 +69,23 @@ class InboxClient {
             folder.open(Folder.READ_ONLY)
             try {
                 val total = folder.messageCount
+                if (total <= 0) return@withContext emptyList()
                 val from = maxOf(1, total - limit + 1)
+                val msgs = folder.getMessages(from, total)
+                val fp = FetchProfile().apply {
+                    add(FetchProfile.Item.ENVELOPE)
+                    add(FetchProfile.Item.CONTENT_INFO)
+                    if (folder is UIDFolder) add(UIDFolder.FetchProfileItem.UID)
+                }
+                folder.fetch(msgs, fp)
+                val uidFolder = folder as? UIDFolder
                 val out = mutableListOf<InboxMessage>()
-                for (i in total downTo from) {
-                    val m = folder.getMessage(i) as MimeMessage
+                for (idx in msgs.indices.reversed()) {
+                    val m = msgs[idx] as MimeMessage
+                    val msgNum = from + idx
+                    val uid = try {
+                        uidFolder?.getUID(m) ?: -1L
+                    } catch (_: Exception) { -1L }
                     val body = bodyText(m)
                     val fromStr = m.from?.firstOrNull()?.toString() ?: ""
                     val subj = m.subject ?: ""
@@ -79,7 +95,7 @@ class InboxClient {
                     val bouncedAddr = if (isBounce) extractBouncedEmail(body, s.fromEmail) else null
                     out.add(
                         InboxMessage(
-                            position = total - i,
+                            position = total - msgNum,
                             from = fromStr,
                             subject = subj,
                             date = m.sentDate?.time ?: 0L,
@@ -87,7 +103,8 @@ class InboxClient {
                             messageId = msgId,
                             references = refs,
                             isBounce = isBounce,
-                            bouncedAddress = bouncedAddr
+                            bouncedAddress = bouncedAddr,
+                            uid = uid
                         )
                     )
                 }
@@ -101,7 +118,7 @@ class InboxClient {
         Triple(full.subject, full.body, full.messageId)
     }
 
-    suspend fun readFull(s: Settings, position: Int): InboxFullMessage = withContext(Dispatchers.IO) {
+    suspend fun readFull(s: Settings, position: Int, uid: Long = -1L): InboxFullMessage = withContext(Dispatchers.IO) {
         val store = session(s).getStore(protocol(s))
         store.connect(s.imapHost, s.imapPort, s.imapUser, s.imapPass)
         try {
@@ -109,7 +126,11 @@ class InboxClient {
             folder.open(Folder.READ_ONLY)
             try {
                 val total = folder.messageCount
-                val m = folder.getMessage(total - position) as MimeMessage
+                if (total <= 0) throw IllegalStateException("صندوق ورودی خالی است")
+                val uidMsg = if (uid >= 0L && folder is UIDFolder) {
+                    try { folder.getMessageByUID(uid) as? MimeMessage } catch (_: Exception) { null }
+                } else null
+                val m = uidMsg ?: folder.getMessage((total - position).coerceIn(1, total)) as MimeMessage
                 val msgId = m.getHeader("Message-ID")?.firstOrNull()?.trim()
                 val refs = m.getHeader("References")?.joinToString(" ")?.trim()
                 InboxFullMessage(m.subject ?: "", bodyText(m), msgId, refs)

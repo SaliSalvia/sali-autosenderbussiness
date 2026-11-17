@@ -106,7 +106,10 @@ object ReportReader {
 
     /** Lists all PDFs in [folder] sorted NEWEST FIRST by filename timestamp / lastModified. */
     fun pdfsIn(folder: DocumentFile): List<DocumentFile> =
-        folder.listFiles()
+        pdfsFrom(folder.listFiles())
+
+    private fun pdfsFrom(files: Array<DocumentFile>): List<DocumentFile> =
+        files
             .filter { it.isFile && it.name?.lowercase()?.endsWith(".pdf") == true }
             .sortedWith(
                 compareByDescending<DocumentFile> {
@@ -137,8 +140,9 @@ object ReportReader {
     ): ReportBundle {
         val warnings = mutableListOf<String>()
         val docs = mutableListOf<PdfDoc>()
+        val children = try { folder.listFiles() } catch (_: Exception) { emptyArray() }
 
-        val sidecar = jsonIn(folder)?.let { f ->
+        val sidecar = children.firstOrNull { it.isFile && it.name?.lowercase()?.endsWith(".json") == true }?.let { f ->
             try {
                 context.contentResolver.openInputStream(f.uri)?.bufferedReader()?.use { it.readText() }
             } catch (e: Exception) {
@@ -147,7 +151,7 @@ object ReportReader {
             }
         }
 
-        val allPdfFiles = pdfsIn(folder)
+        val allPdfFiles = pdfsFrom(children)
         val toParse = allPdfFiles.take(6)
 
         for (f in toParse) {

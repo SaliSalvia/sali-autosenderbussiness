@@ -433,6 +433,7 @@ fun CampaignStudioScreen(
             val uuid = current.messageUuid
             scope.launch {
                 app.db.messageDao().demote(uuid, "متن پس از تأیید ویرایش شد؛ نیاز به تأیید دوباره")
+                app.engine.notifyQueueChanged()
             }
         }
         val finalItem = if (current.approved) reviewed.copy(approved = false) else reviewed
@@ -517,6 +518,7 @@ fun CampaignStudioScreen(
             if (existing != null) app.db.messageDao().update(entity)
             else app.db.messageDao().insert(entity)
         }
+        app.engine.notifyQueueChanged()
         val list = app.session.drafts.value.toMutableList()
         val idx = list.indexOfFirst { it.key == item.key }
             if (idx >= 0) {
@@ -1131,6 +1133,9 @@ private fun MatchCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    if (ContactsParser.isRoleEmail(m.email)) {
+                        Chip("ایمیل عمومی (role)", OrangeWarn)
+                    }
                     m.report?.score?.let { Chip("امتیاز $it/100", if (it < 50) RedErr else OrangeWarn) }
                     m.report?.findings?.let { Chip("$it یافته", MaterialTheme.colorScheme.primary) }
                     m.bundle.trialAttachments.forEach { pdf ->
@@ -1243,6 +1248,9 @@ private fun DraftReviewCard(
                         }
                         if (item.generated) {
                             Chip("موضوع: ${item.subjectVariant}", MaterialTheme.colorScheme.primary)
+                        }
+                        if (ContactsParser.isRoleEmail(item.email)) {
+                            Chip("ایمیل عمومی (role)", OrangeWarn)
                         }
                     }
 
@@ -1496,6 +1504,18 @@ private fun HtmlPreviewDialog(
     settings: ir.salisec.autosender.data.Settings,
     onDismiss: () -> Unit
 ) {
+    val sigTrimmed = settings.signature.trim()
+    val unsubTrimmed = settings.unsubscribeFooter.trim()
+    val cleanBody = remember(item.body, sigTrimmed, unsubTrimmed) {
+        var b = item.body.trim()
+        if (sigTrimmed.isNotBlank() && b.endsWith(sigTrimmed)) {
+            b = b.removeSuffix(sigTrimmed).trim()
+        }
+        if (unsubTrimmed.isNotBlank() && b.endsWith(unsubTrimmed)) {
+            b = b.removeSuffix(unsubTrimmed).trim()
+        }
+        b
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("پیش‌نمایش قالب خروجی ایمیل") },
@@ -1517,13 +1537,15 @@ private fun HtmlPreviewDialog(
                         modifier = Modifier.padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text(item.body, style = MaterialTheme.typography.bodyMedium)
-                        HorizontalDivider()
-                        if (settings.signature.isNotBlank()) {
-                            Text(settings.signature, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(cleanBody, style = MaterialTheme.typography.bodyMedium)
+                        if (sigTrimmed.isNotBlank() || unsubTrimmed.isNotBlank()) {
+                            HorizontalDivider()
                         }
-                        if (settings.unsubscribeFooter.isNotBlank()) {
-                            Text(settings.unsubscribeFooter, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (sigTrimmed.isNotBlank()) {
+                            Text(sigTrimmed, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (unsubTrimmed.isNotBlank()) {
+                            Text(unsubTrimmed, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }

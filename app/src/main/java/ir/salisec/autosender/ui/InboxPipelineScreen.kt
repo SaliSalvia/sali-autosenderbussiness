@@ -596,6 +596,7 @@ private fun PipelineTab(app: App) {
                             app.db.messageDao().update(
                                 d.original.copy(followUpAt = null, updatedAt = System.currentTimeMillis())
                             )
+                            app.engine.notifyQueueChanged()
                             draft = null
                             okMsg = "پیگیری مرحله $nextStep برای ${d.original.domain} به صف ارسال اضافه شد"
                             reload()
@@ -619,6 +620,7 @@ private fun PipelineTab(app: App) {
                     deleteTarget = null
                     scope.launch {
                         app.db.messageDao().delete(target)
+                        app.engine.notifyQueueChanged()
                         val uuid = target.messageUuid
                         if (!uuid.isNullOrBlank()) {
                             app.session.drafts.value = app.session.drafts.value.map { d ->
@@ -731,7 +733,7 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                             notice = null
                             try {
                                 val latest = app.prefs.load()
-                                val full = app.inbox.readFull(latest, m.position)
+                                val full = app.inbox.readFull(latest, m.position, m.uid)
                                 openText = full.body
                                 openMessageId = full.messageId ?: m.messageId
                                 openReferences = full.references ?: m.references

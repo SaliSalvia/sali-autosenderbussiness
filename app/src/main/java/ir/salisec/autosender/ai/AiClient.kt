@@ -553,6 +553,9 @@ $tplNote
         throw RuntimeException(lastError)
     }
 
+    private fun optCleanStr(o: JSONObject, key: String): String =
+        if (o.isNull(key)) "" else o.optString(key, "").trim().let { if (it == "null") "" else it }
+
     /** Lenient parse: models often wrap JSON in code fences or add prose. */
     fun parseAiResult(content: String): AiResult {
         val cleaned = content.replace("```json", "").replace("```JSON", "").replace("```", "").trim()
@@ -565,15 +568,17 @@ $tplNote
                 val arr = o.optJSONArray("subject_alternatives") ?: o.optJSONArray("subjects")
                 if (arr != null) {
                     for (i in 0 until arr.length()) {
-                        arr.optString(i).takeIf { it.isNotBlank() }?.let { alts.add(it) }
+                        if (!arr.isNull(i)) {
+                            arr.optString(i).trim().takeIf { it.isNotBlank() && it != "null" }?.let { alts.add(it) }
+                        }
                     }
                 }
                 return AiResult(
-                    subject = o.optString("subject", ""),
-                    preheader = o.optString("preheader", ""),
-                    body = o.optString("body", o.optString("email_body", "")),
+                    subject = optCleanStr(o, "subject"),
+                    preheader = optCleanStr(o, "preheader"),
+                    body = optCleanStr(o, "body").ifBlank { optCleanStr(o, "email_body") },
                     subjectAlternatives = alts,
-                    cta = o.optString("cta", "")
+                    cta = optCleanStr(o, "cta")
                 )
             } catch (e: Exception) {
                 // fall through

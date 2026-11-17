@@ -90,7 +90,14 @@ class CampaignSession {
         contacts.value = s.contacts.associateBy { it.email.ifBlank { it.domain } }
         if (s.contacts.isNotEmpty()) {
             rawEmailsInput.value = s.contacts.joinToString("\n") { c ->
-                if (!c.name.isNullOrBlank()) "${c.email}, ${c.name}" else c.email
+                val emailDomain = c.email.substringAfter('@', "").lowercase()
+                val hasCustomDomain = c.domain.isNotBlank() && emailDomain.isNotBlank() && c.domain != emailDomain
+                when {
+                    hasCustomDomain && !c.name.isNullOrBlank() -> "${c.domain}, ${c.email}, ${c.name}"
+                    hasCustomDomain -> "${c.domain}, ${c.email}"
+                    !c.name.isNullOrBlank() -> "${c.email}, ${c.name}"
+                    else -> c.email
+                }
             }
         }
         selected.value = s.selected

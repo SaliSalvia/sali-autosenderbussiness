@@ -25,11 +25,15 @@ updates:
       - dependency-name: "com.android.application"
         update-types: ["version-update:semver-major"]
       - dependency-name: "org.jetbrains.kotlin.android"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "org.jetbrains.kotlin.plugin.compose"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "org.jetbrains.kotlin.kapt"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "androidx.core:core-ktx"
+        versions: [">= 1.17.0"]
+      - dependency-name: "androidx.compose:compose-bom"
+        versions: [">= 2026.01.00"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
