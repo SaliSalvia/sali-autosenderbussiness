@@ -1,14 +1,21 @@
 package ir.salisec.autosender.ui
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Build
+import android.os.ParcelFileDescriptor
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -16,27 +23,37 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ForwardToInbox
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.ForwardToInbox
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -49,6 +66,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -59,6 +77,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -73,6 +94,7 @@ import ir.salisec.autosender.data.AttachmentSnapshotReader
 import ir.salisec.autosender.data.ContactsParser
 import ir.salisec.autosender.data.DomainMatch
 import ir.salisec.autosender.data.MessageEntity
+import ir.salisec.autosender.data.Prefs
 import ir.salisec.autosender.data.ReportBundle
 import ir.salisec.autosender.data.ReportReader
 import kotlinx.coroutines.Dispatchers
@@ -109,6 +131,8 @@ fun CampaignStudioScreen(
     var sitestUri by remember { mutableStateOf(app.prefs.load().sitestFolderUri) }
     var matchSearch by remember { mutableStateOf("") }
     var matchFilter by remember { mutableStateOf("ALL") } // ALL | READY | MISSING
+    var draftSearch by remember { mutableStateOf("") }
+    var draftFilter by remember { mutableStateOf("ALL") } // ALL | READY | APPROVED | FAILED
 
     var batchGenerating by remember { mutableStateOf(false) }
     var batchProgressText by remember { mutableStateOf("") }
@@ -117,8 +141,20 @@ fun CampaignStudioScreen(
     var activeModelLabel by remember { mutableStateOf(app.prefs.load().hcnsModel) }
     var defaultStyle by remember { mutableStateOf("BUSINESS") }
 
+    var previewPdfUri by remember { mutableStateOf<String?>(null) }
+    var previewHtmlItem by remember { mutableStateOf<CampaignDraftItem?>(null) }
+    var showTemplatesDialog by remember { mutableStateOf(false) }
+    var approvingKeys by remember { mutableStateOf(emptySet<String>()) }
+
+    BackHandler(enabled = step == 1) { step = 0 }
+
     val suppressed = remember { app.prefs.suppressedSet() }
     val allParsedContacts = remember(rawInput) { ContactsParser.parse(rawInput) }
+    val invalidInputLines = remember(rawInput) {
+        rawInput.lines().count { line ->
+            line.isNotBlank() && !ContactsParser.isHeaderLine(line) && ContactsParser.parse(line).isEmpty()
+        }
+    }
     val contacts = remember(allParsedContacts, suppressed) {
         allParsedContacts.filter {
             !suppressed.contains(it.email.lowercase()) && !suppressed.contains(it.domain.lowercase())
@@ -165,6 +201,10 @@ fun CampaignStudioScreen(
     }
 
     fun openPdfPreview(uriString: String) {
+        previewPdfUri = uriString
+    }
+
+    fun openExternalPdf(uriString: String) {
         try {
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(Uri.parse(uriString), "application/pdf")
@@ -198,12 +238,15 @@ fun CampaignStudioScreen(
                         .distinctBy { it.uri.toString() }
 
                     val gate = Semaphore(4)
+                    val pdfDao = app.db.pdfCacheDao()
                     val bundleByUri = coroutineScope {
                         uniqueFolderTargets.map { folder ->
                             async {
                                 gate.withPermit {
                                     val domainHint = folder.name ?: ""
-                                    folder.uri.toString() to (folder.name to ReportReader.readBundle(context, domainHint, folder))
+                                    folder.uri.toString() to (
+                                        folder.name to ReportReader.readBundle(context, domainHint, folder, pdfDao)
+                                    )
                                 }
                             }
                         }.awaitAll()
@@ -229,7 +272,9 @@ fun CampaignStudioScreen(
                     }
                 }
                 app.session.matches.value = result
-                app.session.selected.value = result.filter { it.readyForApproval }.map { it.key }.toSet()
+                val readyKeys = result.filter { it.readyForApproval }.map { it.key }.toSet()
+                val preserved = app.session.selected.value.intersect(readyKeys)
+                app.session.selected.value = if (preserved.isNotEmpty()) preserved else readyKeys
             } catch (e: SecurityException) {
                 scanError = "مجوز دسترسی به پوشه sitest منقضی شده؛ لطفاً دوباره انتخاب کنید."
             } catch (e: Exception) {
@@ -280,7 +325,10 @@ fun CampaignStudioScreen(
                         generated = saved.generated,
                         approved = saved.approved,
                         messageUuid = saved.messageUuid,
-                        modelUsed = saved.modelUsed
+                        modelUsed = saved.modelUsed,
+                        subjectVariant = saved.subjectVariant.ifBlank { "PRIMARY" },
+                        promptTokens = saved.promptTokens,
+                        completionTokens = saved.completionTokens
                     )
                     val q = app.ai.check(
                         result = restored.toResult(),
@@ -307,6 +355,56 @@ fun CampaignStudioScreen(
         }
         app.session.drafts.value = nextDrafts
         step = 1
+    }
+
+    // Automatically rebuild session drafts from Room `studio_drafts` when returning after process death
+    LaunchedEffect(matches, persistedDrafts) {
+        if (matches.isNotEmpty() && drafts.isEmpty() && persistedDrafts.isNotEmpty() && selected.isNotEmpty()) {
+            val s = app.prefs.load()
+            val scores = matches.mapNotNull { it.report?.score }
+            val aggregate = if (scores.isEmpty()) null else AggregateStats(scores.size, scores.average().toInt())
+            val rebuilt = selected.mapNotNull { key ->
+                val m = matches.firstOrNull { it.key == key } ?: return@mapNotNull null
+                val saved = persistedDrafts[key]?.takeIf { it.generated } ?: return@mapNotNull null
+                val alts = try {
+                    val arr = JSONArray(saved.subjectAltsJson)
+                    (0 until arr.length()).mapNotNull { arr.optString(it).takeIf { x -> x.isNotBlank() } }
+                } catch (_: Exception) { emptyList() }
+                val restored = CampaignDraftItem(
+                    key = key,
+                    domain = m.domain,
+                    email = m.email,
+                    name = m.contactName,
+                    match = m,
+                    style = saved.style,
+                    subject = saved.subject,
+                    preheader = saved.preheader,
+                    body = saved.body,
+                    subjectAlternatives = alts,
+                    generated = saved.generated,
+                    approved = saved.approved,
+                    messageUuid = saved.messageUuid,
+                    modelUsed = saved.modelUsed,
+                    subjectVariant = saved.subjectVariant.ifBlank { "PRIMARY" },
+                    promptTokens = saved.promptTokens,
+                    completionTokens = saved.completionTokens
+                )
+                val q = app.ai.check(
+                    result = restored.toResult(),
+                    s = s,
+                    bundle = m.bundle,
+                    aggregate = aggregate,
+                    contactName = m.contactName,
+                    isFollowUp = false,
+                    domain = m.domain,
+                    email = m.email
+                )
+                restored.copy(quality = q)
+            }
+            if (rebuilt.isNotEmpty()) {
+                app.session.drafts.value = rebuilt
+            }
+        }
     }
 
     fun updateDraft(key: String, persist: Boolean = true, transform: (CampaignDraftItem) -> CampaignDraftItem) {
@@ -346,10 +444,12 @@ fun CampaignStudioScreen(
     }
 
     suspend fun approveSingleDraft(item: CampaignDraftItem): String? {
-        if (item.approved) return null
-        if (item.match.attachmentUris.isEmpty()) return "${item.domain}: فایل PDF برای پیوست پیدا نشد"
-        val nameProblem = AttachmentGuard.validateNames(item.match.attachmentNames)
-        if (nameProblem != null) return "${item.domain}: $nameProblem"
+        if (item.approved || approvingKeys.contains(item.key)) return null
+        approvingKeys = approvingKeys + item.key
+        try {
+            if (item.match.attachmentUris.isEmpty()) return "${item.domain}: فایل PDF برای پیوست پیدا نشد"
+            val nameProblem = AttachmentGuard.validateNames(item.match.attachmentNames)
+            if (nameProblem != null) return "${item.domain}: $nameProblem"
 
         val scores = matches.mapNotNull { it.report?.score }
         val aggregate = if (scores.isEmpty()) null else AggregateStats(scores.size, scores.average().toInt())
@@ -408,7 +508,10 @@ fun CampaignStudioScreen(
             campaignId = "active",
             status = "APPROVED",
             styleUsed = item.style,
-            modelUsed = item.modelUsed
+            modelUsed = item.modelUsed,
+            subjectVariant = item.subjectVariant,
+            promptTokens = item.promptTokens,
+            completionTokens = item.completionTokens
         )
         withContext(Dispatchers.IO) {
             if (existing != null) app.db.messageDao().update(entity)
@@ -416,13 +519,16 @@ fun CampaignStudioScreen(
         }
         val list = app.session.drafts.value.toMutableList()
         val idx = list.indexOfFirst { it.key == item.key }
-        if (idx >= 0) {
-            val approvedItem = item.copy(approved = true, quality = q, messageUuid = uuid, error = null)
-            list[idx] = approvedItem
-            app.session.drafts.value = list
-            app.persistDraft(approvedItem)
+            if (idx >= 0) {
+                val approvedItem = item.copy(approved = true, quality = q, messageUuid = uuid, error = null)
+                list[idx] = approvedItem
+                app.session.drafts.value = list
+                app.persistDraft(approvedItem)
+            }
+            return null
+        } finally {
+            approvingKeys = approvingKeys - item.key
         }
-        return null
     }
 
     fun generateBatch(keysToGenerate: List<String>) {
@@ -525,7 +631,10 @@ fun CampaignStudioScreen(
                                             approved = false,
                                             generating = false,
                                             statusNote = "",
-                                            modelUsed = r.modelUsed.ifBlank { activeModelLabel }
+                                            modelUsed = r.modelUsed.ifBlank { activeModelLabel },
+                                            subjectVariant = "PRIMARY",
+                                            promptTokens = r.promptTokens,
+                                            completionTokens = r.completionTokens
                                         )
                                     }
                                 } catch (e: Exception) {
@@ -625,6 +734,9 @@ fun CampaignStudioScreen(
                         }
                     }
                 }
+                if (invalidInputLines > 0) {
+                    Chip("$invalidInputLines سطر فاقد آدرس ایمیل معتبر بود و نادیده گرفته شد", OrangeWarn)
+                }
                 if (blockedCount > 0) {
                     Chip("$blockedCount مخاطب به دلیل لیست عدم ارسال (opt-out) کنار گذاشته شد", OrangeWarn)
                 }
@@ -678,27 +790,34 @@ fun CampaignStudioScreen(
                     if (scanning) {
                         LoadingBox("در حال جستجوی خودکار پوشه‌ها و استخراج ۲ PDF جدیدترین...")
                     } else if (matches.isNotEmpty()) {
-                        // Search & filter controls for quick scanning of large lead lists
-                        if (matches.size > 4) {
-                            LabeledField(
-                                label = "جستجو در ایمیل یا دامنه",
-                                value = matchSearch,
-                                singleLine = true,
-                                placeholder = "مثلاً inchand"
-                            ) { matchSearch = it }
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                listOf(
-                                    "ALL" to "همه (${matches.size})",
-                                    "READY" to "آماده (${matches.count { it.readyForApproval }})",
-                                    "MISSING" to "ناقص (${matches.count { !it.readyForApproval }})"
-                                ).forEach { (code, lbl) ->
-                                    FilterChip(
-                                        selected = matchFilter == code,
-                                        onClick = { matchFilter = code },
-                                        label = { Text(lbl) }
-                                    )
-                                }
+                        // Search, status filter & bulk selection controls
+                        LabeledField(
+                            label = "جستجو در ایمیل یا دامنه",
+                            value = matchSearch,
+                            singleLine = true,
+                            placeholder = "مثلاً inchand"
+                        ) { matchSearch = it }
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                "ALL" to "همه (${matches.size})",
+                                "READY" to "آماده (${matches.count { it.readyForApproval }})",
+                                "MISSING" to "ناقص (${matches.count { !it.readyForApproval }})"
+                            ).forEach { (code, lbl) ->
+                                FilterChip(
+                                    selected = matchFilter == code,
+                                    onClick = { matchFilter = code },
+                                    label = { Text(lbl) }
+                                )
                             }
+                            TextButton(onClick = {
+                                app.session.selected.value = matches.filter { it.readyForApproval }.map { it.key }.toSet()
+                            }) { Text("انتخاب همه آماده") }
+                            TextButton(onClick = {
+                                app.session.selected.value = emptySet()
+                            }) { Text("لغو انتخاب", color = RedErr) }
                         }
 
                         val filteredMatches = remember(matches, matchSearch, matchFilter) {
@@ -751,6 +870,7 @@ fun CampaignStudioScreen(
             val tplCount = currentSettings.referenceTemplates().size
             val approvedCount = drafts.count { it.approved }
             val readyToApproveCount = drafts.count { it.generated && !it.approved && it.quality.passed }
+            val campaignTokens = drafts.sumOf { it.totalTokens }
 
             Section(
                 header = "تنظیم سبک، ۴ الگوی مرجع و تولید هوشمند",
@@ -763,11 +883,14 @@ fun CampaignStudioScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Chip(
-                        if (tplCount > 0) "$tplCount الگوی ساختاری فعال (کلیک برای ویرایش)" else "بدون الگوی مرجع — کلیک برای افزودن ۴ الگو",
+                        if (tplCount > 0) "$tplCount الگوی ساختاری فعال (کلیک برای ویرایش سریع)" else "بدون الگوی مرجع — کلیک برای افزودن ۴ الگو",
                         if (tplCount > 0) GreenOk else OrangeWarn,
-                        onClick = onOpenSettings
+                        onClick = { showTemplatesDialog = true }
                     )
                     Chip("پاس دو مرحله‌ای ویراستار فروش: ${if (currentSettings.enableCriticPass) "فعال ✓" else "خاموش"}", GreenOk)
+                    if (campaignTokens > 0) {
+                        Chip("مصرف کمپین: $campaignTokens توکن", MaterialTheme.colorScheme.tertiary)
+                    }
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -816,16 +939,63 @@ fun CampaignStudioScreen(
                 testNotice?.let { Chip(it, GreenOk) }
             }
 
+            if (drafts.size > 1) {
+                Section(header = "جستجو و فیلتر پیش‌نویس‌ها") {
+                    LabeledField("جستجو بر اساس ایمیل، دامنه یا موضوع", draftSearch, singleLine = true) { draftSearch = it }
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(
+                            "ALL" to "همه (${drafts.size})",
+                            "READY" to "آماده تأیید ($readyToApproveCount)",
+                            "APPROVED" to "تأییدشده ($approvedCount)",
+                            "FAILED" to "نیاز به اصلاح (${drafts.count { it.generated && !it.quality.passed }})"
+                        ).forEach { (code, lbl) ->
+                            FilterChip(
+                                selected = draftFilter == code,
+                                onClick = { draftFilter = code },
+                                label = { Text(lbl) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            val visibleDrafts = remember(drafts, draftSearch, draftFilter) {
+                drafts.filter { d ->
+                    val qOk = draftSearch.isBlank() ||
+                        d.email.contains(draftSearch, true) ||
+                        d.domain.contains(draftSearch, true) ||
+                        d.subject.contains(draftSearch, true)
+                    val fOk = when (draftFilter) {
+                        "READY" -> d.generated && !d.approved && d.quality.passed
+                        "APPROVED" -> d.approved
+                        "FAILED" -> d.generated && !d.quality.passed
+                        else -> true
+                    }
+                    qOk && fOk
+                }
+            }
+
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                drafts.forEach { item ->
+                visibleDrafts.forEach { item ->
                     DraftReviewCard(
                         item = item,
+                        approving = approvingKeys.contains(item.key),
                         companySummary = contextsMap[item.domain]?.summary.orEmpty(),
                         onStyle = { st -> updateDraft(item.key) { it.copy(style = st) } },
-                        onSubject = { v -> updateDraft(item.key) { it.copy(subject = v) } },
+                        onSubject = { v ->
+                            updateDraft(item.key) { d ->
+                                val altIdx = d.subjectAlternatives.indexOf(v)
+                                val variant = if (altIdx >= 0) "ALT_${altIdx + 1}" else "CUSTOM"
+                                d.copy(subject = v, subjectVariant = variant)
+                            }
+                        },
+                        onSelectAlternative = { idx, alt ->
+                            updateDraft(item.key) { it.copy(subject = alt, subjectVariant = "ALT_${idx + 1}") }
+                        },
                         onPreheader = { v -> updateDraft(item.key) { it.copy(preheader = v) } },
                         onBody = { v -> updateDraft(item.key) { it.copy(body = v) } },
                         onOpenPdf = { uri -> openPdfPreview(uri) },
+                        onPreviewHtml = { previewHtmlItem = item },
                         onSendTestToSelf = {
                             scope.launch {
                                 genError = null
@@ -864,6 +1034,7 @@ fun CampaignStudioScreen(
                             if (errs.isNotEmpty()) genError = errs.first()
                         }
                     },
+                    enabled = approvingKeys.isEmpty(),
                     modifier = Modifier.fillMaxWidth().testTag("campaign_approve_all")
                 ) {
                     Icon(Icons.Default.DoneAll, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -876,13 +1047,36 @@ fun CampaignStudioScreen(
                 text = if (approvedCount > 0) "صف ارسال آماده و بررسی ضداسپم ($approvedCount پیام) ←"
                 else "ابتدا پیام‌ها را تولید و تأیید کنید",
                 enabled = approvedCount > 0,
-                icon = Icons.Default.Send,
+                icon = Icons.AutoMirrored.Filled.Send,
                 modifier = Modifier.testTag("campaign_go_send")
             ) {
                 onGoToSend()
             }
         }
         Spacer(Modifier.height(10.dp))
+    }
+
+    previewPdfUri?.let { uriStr ->
+        PdfPreviewDialog(
+            uriString = uriStr,
+            onOpenExternal = { openExternalPdf(uriStr) },
+            onDismiss = { previewPdfUri = null }
+        )
+    }
+
+    previewHtmlItem?.let { item ->
+        HtmlPreviewDialog(
+            item = item,
+            settings = app.prefs.load(),
+            onDismiss = { previewHtmlItem = null }
+        )
+    }
+
+    if (showTemplatesDialog) {
+        QuickTemplatesDialog(
+            app = app,
+            onDismiss = { showTemplatesDialog = false }
+        )
     }
 }
 
@@ -957,12 +1151,15 @@ private fun MatchCard(
 @Composable
 private fun DraftReviewCard(
     item: CampaignDraftItem,
+    approving: Boolean,
     companySummary: String,
     onStyle: (String) -> Unit,
     onSubject: (String) -> Unit,
+    onSelectAlternative: (Int, String) -> Unit,
     onPreheader: (String) -> Unit,
     onBody: (String) -> Unit,
     onOpenPdf: (String) -> Unit,
+    onPreviewHtml: () -> Unit,
     onSendTestToSelf: () -> Unit,
     onRegenerate: () -> Unit,
     onApprove: () -> Unit
@@ -995,6 +1192,7 @@ private fun DraftReviewCard(
                     SubTitle(
                         item.domain +
                             (item.modelUsed.takeIf { it.isNotBlank() }?.let { " • $it" } ?: "") +
+                            (if (item.totalTokens > 0) " • ${item.totalTokens} توکن" else "") +
                             (item.subject.takeIf { it.isNotBlank() }?.let { " • $it" } ?: "")
                     )
                 }
@@ -1019,7 +1217,7 @@ private fun DraftReviewCard(
 
             AnimatedVisibility(visible = expanded) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Attached 2 newest PDFs preview (tappable to open PDF viewer)
+                    // Attached 2 newest PDFs preview (tappable to open in-app PDF viewer)
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -1039,6 +1237,12 @@ private fun DraftReviewCard(
                                     Text(pdf.name, style = MaterialTheme.typography.labelSmall)
                                 }
                             }
+                        }
+                        if (item.generated && item.totalTokens > 0) {
+                            Chip("توکن: ${item.promptTokens}+${item.completionTokens}", MaterialTheme.colorScheme.tertiary)
+                        }
+                        if (item.generated) {
+                            Chip("موضوع: ${item.subjectVariant}", MaterialTheme.colorScheme.primary)
                         }
                     }
 
@@ -1073,10 +1277,10 @@ private fun DraftReviewCard(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            item.subjectAlternatives.take(3).forEach { alt ->
+                            item.subjectAlternatives.take(3).forEachIndexed { idx, alt ->
                                 FilterChip(
                                     selected = item.subject == alt,
-                                    onClick = { onSubject(alt) },
+                                    onClick = { onSelectAlternative(idx, alt) },
                                     label = { Text(alt.take(34), fontSize = 11.sp) }
                                 )
                             }
@@ -1092,13 +1296,26 @@ private fun DraftReviewCard(
                     }
 
                     if (item.generated && item.subject.isNotBlank() && item.body.isNotBlank()) {
-                        OutlinedButton(
-                            onClick = onSendTestToSelf,
-                            modifier = Modifier.fillMaxWidth()
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Default.ForwardToInbox, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("ارسال تست این ایمیل به خودم (با ۲ پیوست)")
+                            OutlinedButton(
+                                onClick = onPreviewHtml,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("پیش‌نمایش HTML", fontSize = 12.sp)
+                            }
+                            OutlinedButton(
+                                onClick = onSendTestToSelf,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.ForwardToInbox, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("تست به خودم", fontSize = 12.sp)
+                            }
                         }
                     }
 
@@ -1108,7 +1325,7 @@ private fun DraftReviewCard(
                     ) {
                         OutlinedButton(
                             onClick = onRegenerate,
-                            enabled = !item.generating,
+                            enabled = !item.generating && !approving,
                             modifier = Modifier.weight(1f)
                         ) {
                             Text(if (item.generated) "تولید مجدد" else "تولید تکی")
@@ -1117,16 +1334,255 @@ private fun DraftReviewCard(
                             onClick = onApprove,
                             enabled = item.generated && item.quality.passed &&
                                 item.subject.isNotBlank() && item.body.isNotBlank() &&
-                                item.match.attachmentUris.isNotEmpty() && !item.approved,
+                                item.match.attachmentUris.isNotEmpty() && !item.approved && !approving,
                             modifier = Modifier.weight(1.3f)
                         ) {
                             Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text(if (item.approved) "تأییدشده" else "تأیید و ارسال به صف")
+                            Text(
+                                when {
+                                    item.approved -> "تأییدشده"
+                                    approving -> "در حال ثبت..."
+                                    else -> "تأیید و ارسال به صف"
+                                }
+                            )
                         }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun PdfPreviewDialog(
+    uriString: String,
+    onOpenExternal: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var pageIndex by remember(uriString) { mutableIntStateOf(0) }
+    var pageCount by remember(uriString) { mutableIntStateOf(0) }
+    var bitmap by remember(uriString) { mutableStateOf<Bitmap?>(null) }
+    var renderingPage by remember(uriString) { mutableStateOf(true) }
+    var errorText by remember(uriString) { mutableStateOf<String?>(null) }
+
+    val rendererHolder = remember(uriString) { arrayOfNulls<PdfRenderer>(1) }
+    val pfdHolder = remember(uriString) { arrayOfNulls<ParcelFileDescriptor>(1) }
+
+    DisposableEffect(uriString) {
+        onDispose {
+            try { rendererHolder[0]?.close() } catch (_: Exception) { }
+            try { pfdHolder[0]?.close() } catch (_: Exception) { }
+            rendererHolder[0] = null
+            pfdHolder[0] = null
+        }
+    }
+
+    LaunchedEffect(uriString, pageIndex) {
+        renderingPage = true
+        errorText = null
+        withContext(Dispatchers.IO) {
+            try {
+                if (rendererHolder[0] == null) {
+                    val pfd = context.contentResolver.openFileDescriptor(Uri.parse(uriString), "r")
+                        ?: throw IllegalStateException("فایل PDF قابل باز شدن نیست")
+                    pfdHolder[0] = pfd
+                    rendererHolder[0] = PdfRenderer(pfd)
+                }
+                val r = rendererHolder[0]!!
+                pageCount = r.pageCount
+                val idx = pageIndex.coerceIn(0, maxOf(0, r.pageCount - 1))
+                if (r.pageCount > 0) {
+                    r.openPage(idx).use { page ->
+                        val targetScale = minOf(2f, 1600f / page.width.coerceAtLeast(1))
+                        val w = (page.width * targetScale).toInt().coerceAtLeast(100)
+                        val h = (page.height * targetScale).toInt().coerceAtLeast(100)
+                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                        bmp.eraseColor(android.graphics.Color.WHITE)
+                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        bitmap = bmp
+                    }
+                }
+            } catch (e: Exception) {
+                errorText = e.message?.take(140) ?: "خطا در نمایش PDF"
+            }
+        }
+        renderingPage = false
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("پیش‌نمایش PDF", style = MaterialTheme.typography.titleMedium)
+                if (pageCount > 0) {
+                    Text(
+                        "صفحه ${pageIndex + 1} از $pageCount",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                errorText?.let { Chip(it, RedErr) }
+                if (renderingPage && bitmap == null) {
+                    LoadingBox("در حال رندر صفحه PDF...")
+                } else {
+                    if (renderingPage) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    bitmap?.let { bmp ->
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 420.dp)
+                        ) {
+                            Image(
+                                bitmap = bmp.asImageBitmap(),
+                                contentDescription = "صفحه PDF",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color.White)
+                            )
+                        }
+                    }
+                }
+
+                if (pageCount > 1) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = { if (pageIndex > 0) pageIndex-- },
+                            enabled = pageIndex > 0 && !renderingPage
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "صفحه قبل")
+                        }
+                        Text("${pageIndex + 1} / $pageCount", style = MaterialTheme.typography.bodyMedium)
+                        IconButton(
+                            onClick = { if (pageIndex < pageCount - 1) pageIndex++ },
+                            enabled = pageIndex < pageCount - 1 && !renderingPage
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "صفحه بعد")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("بستن") }
+        },
+        dismissButton = {
+            TextButton(onClick = onOpenExternal) { Text("برنامه خارجی") }
+        }
+    )
+}
+
+@Composable
+private fun HtmlPreviewDialog(
+    item: CampaignDraftItem,
+    settings: ir.salisec.autosender.data.Settings,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("پیش‌نمایش قالب خروجی ایمیل") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("موضوع: ${item.subject}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                if (item.preheader.isNotBlank()) {
+                    SubTitle("Preheader: ${item.preheader}")
+                }
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(item.body, style = MaterialTheme.typography.bodyMedium)
+                        HorizontalDivider()
+                        if (settings.signature.isNotBlank()) {
+                            Text(settings.signature, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (settings.unsubscribeFooter.isNotBlank()) {
+                            Text(settings.unsubscribeFooter, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                if (item.match.attachmentNames.isNotEmpty()) {
+                    Chip("پیوست‌ها: ${item.match.attachmentNames.joinToString(" + ")}", GreenOk)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("تأیید و بستن") }
+        }
+    )
+}
+
+@Composable
+private fun QuickTemplatesDialog(
+    app: App,
+    onDismiss: () -> Unit
+) {
+    var s by remember { mutableStateOf(app.prefs.load()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon(Icons.Default.EditNote, contentDescription = null)
+                Text("ویرایش سریع ۴ الگوی مرجع hcnsec")
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SubTitle("این ۴ متن الگوی ساختار و لحن hcnsec هستند و در همین کمپین اعمال می‌شوند.")
+                LabeledField("الگوی ۱", s.template1, multiline = true) { s = s.copy(template1 = it) }
+                LabeledField("الگوی ۲", s.template2, multiline = true) { s = s.copy(template2 = it) }
+                LabeledField("الگوی ۳", s.template3, multiline = true) { s = s.copy(template3 = it) }
+                LabeledField("الگوی ۴", s.template4, multiline = true) { s = s.copy(template4 = it) }
+                OutlinedButton(
+                    onClick = {
+                        s = s.copy(
+                            template1 = s.template1.ifBlank { Prefs.SAMPLE_TEMPLATES[0] },
+                            template2 = s.template2.ifBlank { Prefs.SAMPLE_TEMPLATES[1] },
+                            template3 = s.template3.ifBlank { Prefs.SAMPLE_TEMPLATES[2] },
+                            template4 = s.template4.ifBlank { Prefs.SAMPLE_TEMPLATES[3] }
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("درج نمونه‌های پیشنهادی در موارد خالی") }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                app.prefs.save(s)
+                onDismiss()
+            }) { Text("ذخیره الگوها") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("بستن") }
+        }
+    )
 }

@@ -345,10 +345,22 @@ fun EmailSetupWizard(
                         smtpPort = auto.smtpPort.toString()
                         smtpSecurity = auto.smtpSecurity
                     }
+                    val resolved = auto.resolvedUsername(email)
+                    if (imapUser.isBlank()) imapUser = resolved
+                    if (smtpUser.isBlank()) smtpUser = resolved
                 }
                 val candidate = buildCandidateSettings()
                 val checkIn = candidate.imapHost.isNotBlank() && candidate.imapPass.isNotBlank()
                 val checkOut = candidate.hasOutgoingConfigured()
+                if (!checkOut) {
+                    verifying = false
+                    formError = if (sendMode == "BREVO_API") {
+                        "برای ارسال با Brevo، کلید API را وارد کنید یا روش SMTP را برگزینید."
+                    } else {
+                        "برای تست SMTP، رمز ایمیل و مشخصات سرور خروجی را کامل کنید."
+                    }
+                    return@launch
+                }
                 val res = EmailAutoconfig.verifyIncomingAndOutgoing(
                     client = app.ok,
                     s = candidate,
@@ -357,7 +369,7 @@ fun EmailSetupWizard(
                 )
                 verifyResult = res
                 verifying = false
-                if (res.allOk && checkOut) {
+                if (res.allOk) {
                     app.prefs.save(candidate)
                     onDone()
                 }

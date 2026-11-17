@@ -17,6 +17,7 @@ import ir.salisec.autosender.data.DomainMatch
 import ir.salisec.autosender.data.MIGRATION_2_3
 import ir.salisec.autosender.data.MIGRATION_3_4
 import ir.salisec.autosender.data.MIGRATION_4_5
+import ir.salisec.autosender.data.MIGRATION_5_6
 import ir.salisec.autosender.data.Prefs
 import ir.salisec.autosender.data.StudioDraftEntity
 import ir.salisec.autosender.mail.DeliverabilityChecker
@@ -53,15 +54,22 @@ data class CampaignDraftItem(
     val statusNote: String = "",
     val error: String? = null,
     val messageUuid: String? = null,
-    val modelUsed: String = ""
+    val modelUsed: String = "",
+    val subjectVariant: String = "PRIMARY",
+    val promptTokens: Int = 0,
+    val completionTokens: Int = 0
 ) {
+    val totalTokens: Int get() = promptTokens + completionTokens
+
     fun toResult(): AiResult = AiResult(
         subject = subject,
         preheader = preheader,
         body = body,
         subjectAlternatives = subjectAlternatives,
         quality = quality,
-        modelUsed = modelUsed
+        modelUsed = modelUsed,
+        promptTokens = promptTokens,
+        completionTokens = completionTokens
     )
 }
 
@@ -120,7 +128,7 @@ class App : Application() {
         super.onCreate()
         PDFBoxResourceLoader.init(applicationContext)
         db = Room.databaseBuilder(this, AppDatabase::class.java, "sali.db")
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
             .build()
         prefs = Prefs(this)
         ai = AiClient(ok)
@@ -152,7 +160,10 @@ class App : Application() {
             approved = item.approved,
             messageUuid = item.messageUuid,
             modelUsed = item.modelUsed,
-            updatedAt = System.currentTimeMillis()
+            updatedAt = System.currentTimeMillis(),
+            subjectVariant = item.subjectVariant,
+            promptTokens = item.promptTokens,
+            completionTokens = item.completionTokens
         )
         session.persistedDrafts.value = session.persistedDrafts.value + (item.key to entity)
         appScope.launch {
@@ -166,6 +177,7 @@ class App : Application() {
         db.campaignDao().clearAll()
         db.companyCacheDao().clearAll()
         db.studioDraftDao().clearAll()
+        db.pdfCacheDao().clearAll()
         prefs.clear()
         enricher.clearCache()
         session.reset()

@@ -15,11 +15,19 @@ data class InboxMessage(
     val date: Long,
     val preview: String,
     val messageId: String? = null,
+    val references: String? = null,
     val isBounce: Boolean = false,
     val bouncedAddress: String? = null
 )
 
-/** IMAP inbox client supporting SSL (993) and STARTTLS (143), with Message-ID & bounce parsing. */
+data class InboxFullMessage(
+    val subject: String,
+    val body: String,
+    val messageId: String?,
+    val references: String?
+)
+
+/** IMAP inbox client supporting SSL (993) and STARTTLS (143), with Message-ID, References & bounce parsing. */
 class InboxClient {
 
     private val bounceSenders = listOf("mailer-daemon", "postmaster", "mail delivery subsystem", "bounce")
@@ -65,7 +73,8 @@ class InboxClient {
                     val body = bodyText(m)
                     val fromStr = m.from?.firstOrNull()?.toString() ?: ""
                     val subj = m.subject ?: ""
-                    val msgId = m.getHeader("Message-ID")?.firstOrNull()
+                    val msgId = m.getHeader("Message-ID")?.firstOrNull()?.trim()
+                    val refs = m.getHeader("References")?.joinToString(" ")?.trim()
                     val isBounce = isBounceMessage(fromStr, subj, body)
                     val bouncedAddr = if (isBounce) extractBouncedEmail(body, s.fromEmail) else null
                     out.add(
@@ -74,8 +83,9 @@ class InboxClient {
                             from = fromStr,
                             subject = subj,
                             date = m.sentDate?.time ?: 0L,
-                            preview = body.replace("\\s+".toRegex(), " ").take(110),
+                            preview = body.replace("\\s+".toRegex(), " ").take(140),
                             messageId = msgId,
+                            references = refs,
                             isBounce = isBounce,
                             bouncedAddress = bouncedAddr
                         )
@@ -87,6 +97,11 @@ class InboxClient {
     }
 
     suspend fun read(s: Settings, position: Int): Triple<String, String, String?> = withContext(Dispatchers.IO) {
+        val full = readFull(s, position)
+        Triple(full.subject, full.body, full.messageId)
+    }
+
+    suspend fun readFull(s: Settings, position: Int): InboxFullMessage = withContext(Dispatchers.IO) {
         val store = session(s).getStore(protocol(s))
         store.connect(s.imapHost, s.imapPort, s.imapUser, s.imapPass)
         try {
@@ -95,8 +110,9 @@ class InboxClient {
             try {
                 val total = folder.messageCount
                 val m = folder.getMessage(total - position) as MimeMessage
-                val msgId = m.getHeader("Message-ID")?.firstOrNull()
-                Triple(m.subject ?: "", bodyText(m), msgId)
+                val msgId = m.getHeader("Message-ID")?.firstOrNull()?.trim()
+                val refs = m.getHeader("References")?.joinToString(" ")?.trim()
+                InboxFullMessage(m.subject ?: "", bodyText(m), msgId, refs)
             } finally { folder.close(false) }
         } finally { store.close() }
     }

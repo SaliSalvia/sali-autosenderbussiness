@@ -1,5 +1,7 @@
 package ir.salisec.autosender.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
@@ -24,7 +27,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -46,15 +48,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import ir.salisec.autosender.App
 import ir.salisec.autosender.R
 import ir.salisec.autosender.data.MessageEntity
@@ -62,7 +61,6 @@ import ir.salisec.autosender.data.PrivacyRedactor
 import ir.salisec.autosender.mail.CheckSeverity
 import ir.salisec.autosender.mail.DeliverabilityReport
 import ir.salisec.autosender.send.MessageState
-import ir.salisec.autosender.send.SendService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -72,7 +70,6 @@ import java.util.Locale
 @Composable
 fun SendScreen(app: App, onOpenSettings: () -> Unit) {
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val state by app.engine.state.collectAsState()
     val deliverability by app.session.deliverability.collectAsState()
@@ -168,7 +165,8 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
             checking = checkingDns,
             copiedNotice = copiedRecordNotice,
             onCopyRecord = { rec ->
-                clipboard.setText(AnnotatedString(rec))
+                val cm = context.getSystemService(ClipboardManager::class.java)
+                cm?.setPrimaryClip(ClipData.newPlainText("DNS Record", rec))
                 copiedRecordNotice = "رکورد DNS کپی شد؛ در پنل دامنه ثبت کرده و دکمه «چک مجدد» را بزنید."
             },
             onRecheck = { runDeliverabilityChecks() }
@@ -190,7 +188,20 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
                 StatChip("امروز", state.sentToday.toString(), MaterialTheme.colorScheme.tertiary, Modifier.weight(1f))
             }
 
-            if (state.running) {
+            if (state.waitingForBusinessHours && !state.running) {
+                val resumeTime = state.waitingUntil?.let {
+                    SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US).format(Date(it))
+                } ?: ""
+                Chip(
+                    "خارج از ساعت اداری — صف به‌صورت خودکار در شروع ساعت کاری ($resumeTime) ارسال می‌شود.",
+                    OrangeWarn
+                )
+                OutlinedButton(onClick = { app.engine.cancel() }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Cancel, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("لغو زمان‌بندی صف")
+                }
+            } else if (state.running) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 state.currentDomain?.let { SubTitle(stringResource(R.string.home_current) + ": $it") }
                 state.waitingUntil?.let { w ->
@@ -225,7 +236,7 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
                     text = if (pending > 0) stringResource(R.string.send_bulk) + " ($pending)"
                     else stringResource(R.string.send_bulk_empty),
                     enabled = pending > 0 && !checkingDns,
-                    icon = Icons.Default.Send,
+                    icon = Icons.AutoMirrored.Filled.Send,
                     modifier = Modifier.testTag("send_start_button")
                 ) {
                     showSendConfirm = true
@@ -234,7 +245,7 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
         }
 
         if (queue.isNotEmpty()) {
-            Section(header = stringResource(R.string.send_messages), icon = Icons.Default.Send) {
+            Section(header = stringResource(R.string.send_messages), icon = Icons.AutoMirrored.Filled.Send) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     queue.take(100).forEach { m ->
                         Surface(
@@ -341,9 +352,7 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
             confirmButton = {
                 Button(onClick = {
                     showSendConfirm = false
-                    ContextCompat.startForegroundService(
-                        context, Intent(context, SendService::class.java)
-                    )
+                    app.engine.enqueueWork()
                 }) { Text(if (dr?.hasCriticalFailure == true) "ارسال با مسئولیت خودم" else stringResource(R.string.send_confirm_ok)) }
             },
             dismissButton = {
@@ -387,10 +396,15 @@ private fun DeliverabilityChecklistCard(
         if (checking) {
             LoadingBox("در حال استعلام زنده رکوردهای DNS (SPF، DKIM، DMARC، MX) و تست اتصال...")
         } else if (report != null) {
+            val timeStr = remember(report.checkedAt) {
+                SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(report.checkedAt))
+            }
             if (report.isClean) {
-                Chip("دامنه ${report.senderDomain} برای ارسال با کمترین ریسک اسپم کاملاً تأیید شد ✓", GreenOk)
+                Chip("دامنه ${report.senderDomain} برای ارسال با کمترین ریسک اسپم کاملاً تأیید شد ✓ (بررسی: $timeStr)", GreenOk)
             } else if (report.hasCriticalFailure) {
-                Chip("هشدار: مشکلات بحرانی پایین را در پنل DNS / تنظیمات برطرف کرده و «چک مجدد» بزنید.", RedErr)
+                Chip("هشدار: مشکلات بحرانی پایین را در پنل DNS / تنظیمات برطرف کرده و «چک مجدد» بزنید (بررسی: $timeStr)", RedErr)
+            } else {
+                SubTitle("آخرین بررسی سلامت DNS و اتصال: $timeStr")
             }
 
             copiedNotice?.let { Chip(it, GreenOk) }

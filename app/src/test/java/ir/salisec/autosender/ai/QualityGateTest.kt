@@ -86,4 +86,14 @@ class QualityGateTest {
         assertFalse(r.passed)
         assertTrue(r.blockers.any { it.contains("فراخوان") })
     }
+
+    @Test
+    fun finalizeDoesNotDuplicateUnsubscribeOrSignature() {
+        val client = AiClient(okhttp3.OkHttpClient())
+        val first = client.finalize(valid(), settings)
+        val second = client.finalize(first, settings)
+        assertTrue(first.body == second.body)
+        val unsubCount = second.body.split(settings.unsubscribeFooter.trim()).size - 1
+        assertTrue("Expected exactly 1 unsubscribe footer, got $unsubCount", unsubCount == 1)
+    }
 }

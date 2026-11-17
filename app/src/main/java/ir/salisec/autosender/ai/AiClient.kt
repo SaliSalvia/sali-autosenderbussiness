@@ -206,6 +206,7 @@ class AiClient(private val client: OkHttpClient) {
         previousBody: String? = null,
         domain: String = "",
         email: String = "",
+        customerReplyText: String? = null,
         onResolvedModel: ((ModelProbeResult) -> Unit)? = null
     ): AiResult = withContext(Dispatchers.IO) {
         var activeModel = s.hcnsModel.trim()
@@ -226,24 +227,27 @@ class AiClient(private val client: OkHttpClient) {
         val allowed = QualityGate.allowedNumbers(
             s, bundle, aggregate, previousBody, contactName,
             domain.ifBlank { bundle?.domain.orEmpty() }, email
+        ) + (customerReplyText?.let { QualityGate.numbers(it) } ?: emptySet())
+        val facts = buildFacts(
+            s, bundle, context, aggregate, contactName, style,
+            isFollowUp, previousBody, domain, customerReplyText
         )
-        val facts = buildFacts(s, bundle, context, aggregate, contactName, style, isFollowUp, previousBody, domain)
         val reviewModel = s.hcnsReviewModel.ifBlank { activeModel }
         val maxCalls = s.maxAiCallsPerEmail.coerceIn(1, 3)
         var calls = 0
         var totalPromptTokens = 0
         var totalCompletionTokens = 0
 
-        // 1) DRAFT (deep personalized copy using You.com + PDFs + up to 4 style templates)
+        // 1) DRAFT (deep personalized copy using You.com + PDFs + up to 4 user reference templates)
         val draftOut = try {
-            callModel(s, messages(systemPrompt(s, isFollowUp), facts), activeModel, 0.7, 1700)
+            callModel(s, messages(systemPrompt(s, isFollowUp, !customerReplyText.isNullOrBlank()), facts), activeModel, 0.7, 2000)
         } catch (e: RuntimeException) {
             if (s.autoSelectBestModel && (e.message?.contains("model", ignoreCase = true) == true || e.message?.contains("404") == true)) {
                 val probe = probeAndSelectBestModel(s).getOrNull()
                 if (probe != null && probe.selectedModel != activeModel) {
                     activeModel = probe.selectedModel
                     onResolvedModel?.invoke(probe)
-                    callModel(s, messages(systemPrompt(s, isFollowUp), facts), activeModel, 0.7, 1700)
+                    callModel(s, messages(systemPrompt(s, isFollowUp, !customerReplyText.isNullOrBlank()), facts), activeModel, 0.7, 2000)
                 } else {
                     throw e
                 }
@@ -263,7 +267,7 @@ class AiClient(private val client: OkHttpClient) {
             val criticOut = callModel(
                 s,
                 messages(criticPrompt(s, report, isFollowUp), criticUser(facts, result, report)),
-                reviewModel.ifBlank { activeModel }, 0.45, 1700
+                reviewModel.ifBlank { activeModel }, 0.45, 2000
             )
             calls++
             totalPromptTokens += criticOut.promptTokens
@@ -285,7 +289,7 @@ class AiClient(private val client: OkHttpClient) {
             val repairOut = callModel(
                 s,
                 messages(repairPrompt(report, isFollowUp), criticUser(facts, result, report)),
-                reviewModel.ifBlank { activeModel }, 0.3, 1500
+                reviewModel.ifBlank { activeModel }, 0.3, 1800
             )
             totalPromptTokens += repairOut.promptTokens
             totalCompletionTokens += repairOut.completionTokens
@@ -306,17 +310,24 @@ class AiClient(private val client: OkHttpClient) {
         )
     }
 
-    /** Signature + opt-out footer are added deterministically, never hallucinated. */
+    /** Signature + opt-out footer are added deterministically, never hallucinated or duplicated. */
     fun finalize(result: AiResult, s: Settings): AiResult {
         var body = result.body.trim()
-        val sigFirst = s.signature.lines().firstOrNull()?.trim().orEmpty()
-        if (sigFirst.length > 4 && body.contains(sigFirst)) {
+        val sigTrimmed = s.signature.trim()
+        val sigFirst = sigTrimmed.lines().firstOrNull()?.trim().orEmpty()
+        if (sigTrimmed.isNotBlank() && body.contains(sigTrimmed)) {
+            body = body.substringBefore(sigTrimmed).trim()
+        } else if (sigFirst.length > 4 && body.contains(sigFirst)) {
             body = body.substringBefore(sigFirst).trim()
+        }
+        val unsubTrimmed = s.unsubscribeFooter.trim()
+        if (unsubTrimmed.isNotBlank() && body.contains(unsubTrimmed)) {
+            body = body.substringBefore(unsubTrimmed).trim()
         }
         val composed = buildString {
             append(body)
-            if (s.unsubscribeFooter.isNotBlank()) append("\n\n").append(s.unsubscribeFooter.trim())
-            if (s.signature.isNotBlank()) append("\n\n").append(s.signature.trim())
+            if (unsubTrimmed.isNotBlank()) append("\n\n").append(unsubTrimmed)
+            if (sigTrimmed.isNotBlank()) append("\n\n").append(sigTrimmed)
         }
         return result.copy(body = composed)
     }
@@ -331,12 +342,13 @@ class AiClient(private val client: OkHttpClient) {
         isFollowUp: Boolean = false,
         previousBody: String? = null,
         domain: String = "",
-        email: String = ""
+        email: String = "",
+        customerReplyText: String? = null
     ): QualityReport {
         val allowed = QualityGate.allowedNumbers(
             s, bundle, aggregate, previousBody, contactName,
             domain.ifBlank { bundle?.domain.orEmpty() }, email
-        )
+        ) + (customerReplyText?.let { QualityGate.numbers(it) } ?: emptySet())
         return QualityGate.validate(result, s, allowed, isFollowUp)
     }
 
@@ -349,7 +361,8 @@ class AiClient(private val client: OkHttpClient) {
         style: String,
         isFollowUp: Boolean,
         previousBody: String?,
-        domain: String
+        domain: String,
+        customerReplyText: String? = null
     ): String {
         val sb = StringBuilder()
         sb.append("دامنه هدف: ").append(domain.ifBlank { bundle?.domain ?: "" }).append('\n')
@@ -381,7 +394,15 @@ class AiClient(private val client: OkHttpClient) {
             sb.append("(بسته شواهد محلی در دسترس نیست؛ از دامنه و متن ایمیل قبلی استفاده کن)").append('\n')
         }
         sb.append("\nهویت فرستنده: ").append(s.fromName).append('\n')
-        if (isFollowUp) {
+        if (!customerReplyText.isNullOrBlank()) {
+            sb.append("\n=== آخرین پاسخ دریافتی از مشتری در ایمیل ===\n")
+                .append(customerReplyText.take(1200))
+                .append("\n=== پایان پاسخ مشتری ===\n")
+            if (!previousBody.isNullOrBlank()) {
+                sb.append("متن ایمیل قبلی ما:\n").append(previousBody.take(500)).append('\n')
+            }
+            sb.append("هدف این ایمیل: پاسخ دقیق، محترمانه و فروش‌محور به سوال یا دغدغه مشتری در بالا + ارجاع به یافته‌های واقعی گزارش و هدایت به دریافت گزارش کامل / شروع همکاری.\n")
+        } else if (isFollowUp) {
             sb.append("\nاین ایمیل پیگیری (Follow-up) با هدف تبدیل به خرید است. متن قبلی: ")
                 .append(previousBody?.take(600).orEmpty()).append('\n')
             sb.append("زیر ۹۵ کلمه، محترمانه، با اشاره به یکی دیگر از نکات مهم گزارش پیوست‌شده و دعوت به دریافت گزارش کامل و جلسه ۱۵ دقیقه‌ای بررسی.\n")
@@ -394,20 +415,26 @@ class AiClient(private val client: OkHttpClient) {
         return sb.toString()
     }
 
-    private fun systemPrompt(s: Settings, isFollowUp: Boolean): String = if (isFollowUp) {
-        """تو استراتژیست ارشد فروش B2B فارسی در حوزه امنیت سایبری هستی.
+    private fun systemPrompt(s: Settings, isFollowUp: Boolean, hasCustomerReply: Boolean = false): String = when {
+        hasCustomerReply -> """تو استراتژیست ارشد فروش B2B فارسی در حوزه امنیت سایبری هستی.
+مشتری به ایمیل قبلی پاسخ داده است. با دقت پاسخ مشتری را بخوان و پاسخی دقیق، گرم، حرفه‌ای و متقاعدکننده بنویس که:
+۱. مستقیماً به سوال، نیاز یا دغدغه مشتری پاسخ دهد (از اطلاعات کسب‌وکار You.com و شواهد PDF استفاده کن).
+۲. ارزش دریافت گزارش کامل و نقشه رفع اولویت‌بندی‌شده را شفاف توضیح دهد.
+۳. بدون اغراق یا عدد ساختگی، با یک دعوت کم‌اصطکاک به پاسخ کوتاه یا هماهنگی گفتگوی ۱۵ دقیقه‌ای ختم شود.
+خروجی فقط JSON با کلیدهای {"subject": "...", "subject_alternatives": ["...", "...", "..."], "preheader": "...", "body": "...", "cta": "..."} است. امضا و خط خروج از فهرست ننویس."""
+        isFollowUp -> """تو استراتژیست ارشد فروش B2B فارسی در حوزه امنیت سایبری هستی.
 قوانین سخت: فقط از داده‌های واقعی شواهد و جستجوی You.com استفاده کن؛ هیچ عدد، درصد، تاریخ یا ادعای غیرواقعی نساز. بدون تهدید، ترساندن یا مهلت ساختگی.
 لحن: حرفه‌ای، اجرایی، کوتاه و متقاعدکننده (زیر ۹۵ کلمه). به ۲ فایل گزارش پیوست‌شده اشاره کن و فقط یک فراخوان شفاف بده: پاسخ کوتاه به همین ایمیل برای دریافت گزارش کامل و برنامه رفع فوری.
 خروجی فقط JSON با کلیدهای subject ، subject_alternatives (آرایه ۳ تایی) ، preheader ، body ، cta است. امضا و خط خروج از فهرست ننویس."""
-    } else {
-        val hasTemplates = s.referenceTemplates().isNotEmpty()
-        val templateDirective = if (hasTemplates) {
-            """
+        else -> {
+            val hasTemplates = s.referenceTemplates().isNotEmpty()
+            val templateDirective = if (hasTemplates) {
+                """
 الهام از الگوهای ساختاری کاربر:
 کاربر قالب‌هایی به عنوان نمونه سبک و ساختار معرفی کرده است. ساختار ذهنی، ضرباهنگ پاراگراف‌ها، میزان صمیمیت/رسمیت و روش دعوت به اقدام را از آن‌ها الهام بگیر، اما کلمه‌به‌کلمه تکرارشان نکن و متن را کاملاً منحصربه‌فرد، زنده و دقیقاً منطبق با کسب‌وکار هدف (داده‌های You.com) و یافته‌های واقعی PDF بنویس."""
-        } else ""
+            } else ""
 
-        """تو برترین کپی‌رایتر و استراتژیست فروش B2B فارسی‌زبان در حوزه امنیت سایبری هستی. هدف: بالاترین نرخ بازشدن، پاسخ واقعی مدیران و بیشترین احتمال تبدیل به خرید گزارش کامل و خدمات رفع آسیب‌پذیری.
+            """تو برترین کپی‌رایتر و استراتژیست فروش B2B فارسی‌زبان در حوزه امنیت سایبری هستی. هدف: بالاترین نرخ بازشدن، پاسخ واقعی مدیران و بیشترین احتمال تبدیل به خرید گزارش کامل و خدمات رفع آسیب‌پذیری.
 $templateDirective
 چارچوب فروش با حداکثر تبدیل (Conversion):
 1. Hook اختصاصی مبتنی بر You.com: در جمله اول یا دوم دقیقاً نشان بده می‌دانی این شرکت در چه حوزه‌ای فعالیت می‌کند، چه محصول/خدمتی می‌فروشد و اعتماد آنلاین یا زیرساخت فنی چه نقشی در درآمدش دارد (کلی‌گویی ممنوع!).
@@ -424,6 +451,7 @@ $templateDirective
 - preheader مکمل موضوع (زیر ۹۰ کاراکتر).
 
 خروجی فقط یک JSON معتبر با کلیدهای {"subject": "...", "subject_alternatives": ["...", "...", "..."], "preheader": "...", "body": "...", "cta": "..."} باشد. امضا و خط خروج از فهرست ننویس."""
+        }
     }
 
     private fun criticPrompt(s: Settings, report: QualityReport, isFollowUp: Boolean): String {

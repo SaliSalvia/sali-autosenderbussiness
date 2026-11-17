@@ -55,7 +55,18 @@ data class MessageEntity(
     /** Style code (BUSINESS/TECHNICAL/DIRECT) for conversion analytics. */
     val styleUsed: String = "",
     /** hcnsec model that generated this message. */
-    val modelUsed: String = ""
+    val modelUsed: String = "",
+    /** A/B subject variant chosen (PRIMARY | ALT_1 | ALT_2 | ALT_3 | CUSTOM). */
+    val subjectVariant: String = "PRIMARY",
+    /** Token telemetry from hcnsec API calls. */
+    val promptTokens: Int = 0,
+    val completionTokens: Int = 0,
+    /** Follow-up sequence index: 0 = initial outreach, 1 = 1st follow-up, 2 = 2nd follow-up. */
+    val followUpStep: Int = 0,
+    /** Matched reply snippet from IMAP for contextual follow-ups. */
+    val lastReplySnippet: String? = null,
+    /** Space-separated RFC Message-ID chain for full References threading. */
+    val threadReferences: String? = null
 )
 
 @Entity(tableName = "logs")
@@ -102,6 +113,21 @@ data class StudioDraftEntity(
     val approved: Boolean = false,
     val messageUuid: String? = null,
     val modelUsed: String = "",
+    val updatedAt: Long = System.currentTimeMillis(),
+    val subjectVariant: String = "PRIMARY",
+    val promptTokens: Int = 0,
+    val completionTokens: Int = 0
+)
+
+/** Local PDF extraction cache keyed by SAF URI + file size + lastModified so re-scans are instant. */
+@Entity(tableName = "pdf_cache")
+data class PdfCacheEntity(
+    @PrimaryKey val uri: String,
+    val name: String,
+    val lastModified: Long,
+    val sizeBytes: Long,
+    val pages: Int?,
+    val text: String,
     val updatedAt: Long = System.currentTimeMillis()
 )
 
@@ -210,15 +236,27 @@ interface StudioDraftDao {
     suspend fun clearAll()
 }
 
+@Dao
+interface PdfCacheDao {
+    @Query("SELECT * FROM pdf_cache WHERE uri = :uri LIMIT 1")
+    suspend fun get(uri: String): PdfCacheEntity?
+
+    @Upsert suspend fun upsert(p: PdfCacheEntity)
+
+    @Query("DELETE FROM pdf_cache")
+    suspend fun clearAll()
+}
+
 @Database(
     entities = [
         MessageEntity::class,
         LogEntity::class,
         CampaignEntity::class,
         CompanyCacheEntity::class,
-        StudioDraftEntity::class
+        StudioDraftEntity::class,
+        PdfCacheEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -227,6 +265,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun campaignDao(): CampaignDao
     abstract fun companyCacheDao(): CompanyCacheDao
     abstract fun studioDraftDao(): StudioDraftDao
+    abstract fun pdfCacheDao(): PdfCacheDao
 }
 
 val MIGRATION_2_3 = object : Migration(2, 3) {
@@ -268,6 +307,26 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
                 "`body` TEXT NOT NULL, `subjectAltsJson` TEXT NOT NULL, `generated` INTEGER NOT NULL, " +
                 "`approved` INTEGER NOT NULL, `messageUuid` TEXT, `modelUsed` TEXT NOT NULL, " +
                 "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`key`))"
+        )
+    }
+}
+
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE messages ADD COLUMN subjectVariant TEXT NOT NULL DEFAULT 'PRIMARY'")
+        db.execSQL("ALTER TABLE messages ADD COLUMN promptTokens INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE messages ADD COLUMN completionTokens INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE messages ADD COLUMN followUpStep INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE messages ADD COLUMN lastReplySnippet TEXT")
+        db.execSQL("ALTER TABLE messages ADD COLUMN threadReferences TEXT")
+        db.execSQL("ALTER TABLE studio_drafts ADD COLUMN subjectVariant TEXT NOT NULL DEFAULT 'PRIMARY'")
+        db.execSQL("ALTER TABLE studio_drafts ADD COLUMN promptTokens INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE studio_drafts ADD COLUMN completionTokens INTEGER NOT NULL DEFAULT 0")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `pdf_cache` (" +
+                "`uri` TEXT NOT NULL, `name` TEXT NOT NULL, `lastModified` INTEGER NOT NULL, " +
+                "`sizeBytes` INTEGER NOT NULL, `pages` INTEGER, `text` TEXT NOT NULL, " +
+                "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`uri`))"
         )
     }
 }

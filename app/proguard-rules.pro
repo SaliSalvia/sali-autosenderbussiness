@@ -42,6 +42,8 @@
 -keepclassmembers class kotlin.Metadata { *; }
 -dontwarn kotlinx.coroutines.**
 
-# Keep any custom Application / Service reachable from the manifest.
+# Keep any custom Application / Service / Worker reachable from manifest or WorkManager.
 -keep class ir.salisec.autosender.App { *; }
 -keep class ir.salisec.autosender.send.SendService { *; }
+-keep class ir.salisec.autosender.send.SendWorker { *; }
+-keep class * extends androidx.work.CoroutineWorker { *; }

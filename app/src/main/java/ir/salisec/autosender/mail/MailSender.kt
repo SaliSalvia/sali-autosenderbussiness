@@ -57,9 +57,11 @@ class BrevoSender(private val client: OkHttpClient) : MailSender {
         }
         headersObj.put("List-Unsubscribe", "<mailto:$replyAddr?subject=unsubscribe>")
         headersObj.put("List-Unsubscribe-Post", "List-Unsubscribe=One-Click")
-        msg.inReplyToMessageId?.takeIf { it.isNotBlank() }?.let {
-            headersObj.put("In-Reply-To", it)
-            headersObj.put("References", msg.references?.takeIf { r -> r.isNotBlank() } ?: it)
+        msg.inReplyToMessageId?.takeIf { it.isNotBlank() }?.let { rawId ->
+            val cleanId = normalizeMessageId(rawId)
+            val refs = msg.references?.takeIf { r -> r.isNotBlank() }?.let { normalizeReferences(it) } ?: cleanId
+            headersObj.put("In-Reply-To", cleanId)
+            headersObj.put("References", refs)
         }
 
         val o = JSONObject()
@@ -100,7 +102,7 @@ class BrevoSender(private val client: OkHttpClient) : MailSender {
                     throw RuntimeException("Brevo ${resp.code}: $clean")
                 }
                 val msgId = try {
-                    JSONObject(body).optString("messageId", "").takeIf { it.isNotBlank() }
+                    JSONObject(body).optString("messageId", "").takeIf { it.isNotBlank() }?.let { normalizeMessageId(it) }
                 } catch (_: Exception) { null }
                 SendReceipt(msgId)
             }
@@ -156,9 +158,11 @@ class SmtpSender : MailSender {
         }
         mm.setHeader("List-Unsubscribe", "<mailto:$replyAddr?subject=unsubscribe>")
         mm.setHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click")
-        msg.inReplyToMessageId?.takeIf { it.isNotBlank() }?.let {
-            mm.setHeader("In-Reply-To", it)
-            mm.setHeader("References", msg.references?.takeIf { r -> r.isNotBlank() } ?: it)
+        msg.inReplyToMessageId?.takeIf { it.isNotBlank() }?.let { rawId ->
+            val cleanId = normalizeMessageId(rawId)
+            val refs = msg.references?.takeIf { r -> r.isNotBlank() }?.let { normalizeReferences(it) } ?: cleanId
+            mm.setHeader("In-Reply-To", cleanId)
+            mm.setHeader("References", refs)
         }
 
         // multipart/alternative (plain + clean RTL HTML) inside multipart/mixed when PDFs exist
@@ -200,14 +204,40 @@ class SmtpSender : MailSender {
     }
 }
 
-/** Clean RTL B2B HTML email with hidden preheader and crisp readability on desktop & mobile. */
-private fun buildHtmlEmail(msg: OutgoingMessage): String {
+private fun normalizeMessageId(raw: String): String {
+    val t = raw.trim()
+    return if (t.startsWith("<") && t.endsWith(">")) t else "<${t.trim('<', '>')}>"
+}
+
+private fun normalizeReferences(raw: String): String = raw
+    .split(Regex("""\s+"""))
+    .map { it.trim() }
+    .filter { it.isNotBlank() }
+    .map { normalizeMessageId(it) }
+    .distinct()
+    .joinToString(" ")
+
+/** Clean executive RTL B2B HTML email with hidden preheader and Gmail/Outlook-safe inline layout. */
+fun buildHtmlEmail(msg: OutgoingMessage): String {
     val pre = if (msg.preheader.isBlank()) "" else
         "<div style='display:none;max-height:0;overflow:hidden;opacity:0;font-size:1px;color:#ffffff'>" +
             escapeHtml(msg.preheader) + "</div>"
-    val body = escapeHtml(msg.textBody).replace("\n", "<br>")
-    return "<div dir='rtl' style=\"font-family:Vazirmatn,Tahoma,Arial,sans-serif;font-size:14.5px;line-height:1.95;color:#1F2937;max-width:640px;margin:0 auto;padding:8px 4px\">" +
-        pre + body + "</div>"
+    val rawBody = msg.textBody.ifBlank { msg.htmlBody }.trim()
+    val blocks = rawBody.split(Regex("""\n{2,}"""))
+    val renderedBlocks = blocks.joinToString("") { block ->
+        val safe = escapeHtml(block.trim()).replace("\n", "<br>")
+        val isFooter = block.contains("حذف") || block.contains("unsubscribe", ignoreCase = true) || block.contains("http")
+        if (isFooter) {
+            "<p style=\"margin:14px 0 0 0;padding-top:10px;border-top:1px solid #E5E7EB;font-size:12.5px;line-height:1.75;color:#4B5563\">$safe</p>"
+        } else {
+            "<p style=\"margin:0 0 12px 0;font-size:14.5px;line-height:1.95;color:#111827\">$safe</p>"
+        }
+    }
+    return """<!DOCTYPE html><html dir="rtl" lang="fa"><body style="margin:0;padding:12px;background:#F8FAFC">""" +
+        pre +
+        """<div dir="rtl" style="font-family:Vazirmatn,Tahoma,Arial,sans-serif;max-width:640px;margin:0 auto;background:#FFFFFF;border:1px solid #E2E8F0;border-top:3px solid #0284C7;border-radius:10px;padding:22px 24px">""" +
+        renderedBlocks +
+        "</div></body></html>"
 }
 
 private fun escapeHtml(s: String): String = s

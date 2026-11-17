@@ -186,26 +186,48 @@ class DeliverabilityChecker(private val client: OkHttpClient) {
             }
         )
 
-        // 7. Queue Attachments Check
+        // 7. Queue Attachments & Content Hygiene Check
         if (queuedMessages.isNotEmpty()) {
             val missingPdf = queuedMessages.count { it.pdfPaths.isBlank() }
-            if (missingPdf > 0) {
-                items.add(
+            val overTwo = queuedMessages.count { it.pdfPaths.split("||").count { p -> p.isNotBlank() } > 2 }
+            val badSubjects = queuedMessages.count {
+                val subj = it.subject.lowercase()
+                subj.contains("!!!") || subj.startsWith("re:") || subj.startsWith("fwd:")
+            }
+            when {
+                missingPdf > 0 -> items.add(
                     DeliverabilityItem(
                         key = "attachments",
-                        title = "پیوست‌های صف ارسال",
+                        title = "پیوست‌ها و محتوای صف ارسال",
                         severity = CheckSeverity.WARNING,
                         detail = "$missingPdf پیام در صف فاقد فایل PDF است.",
                         remediation = "پیام‌های بدون پیوست را در استودیو بررسی کنید."
                     )
                 )
-            } else {
-                items.add(
+                overTwo > 0 -> items.add(
                     DeliverabilityItem(
                         key = "attachments",
-                        title = "پیوست‌های صف ارسال",
+                        title = "سقف پیوست‌های صف ارسال",
+                        severity = CheckSeverity.FAIL,
+                        detail = "$overTwo پیام بیش از ۲ فایل پیوست دارد.",
+                        remediation = "سیاست ارسال فقط حداکثر ۲ فایل PDF جدیدترین (زیر ۴MB) را مجاز می‌داند."
+                    )
+                )
+                badSubjects > 0 -> items.add(
+                    DeliverabilityItem(
+                        key = "attachments",
+                        title = "بهداشت موضوع پیام‌ها",
+                        severity = CheckSeverity.WARNING,
+                        detail = "$badSubjects پیام دارای علائم پرریسک اسپم در موضوع است.",
+                        remediation = "موضوع‌های دارای Re: یا علامت تعجب متعدد را در استودیو ویرایش کنید."
+                    )
+                )
+                else -> items.add(
+                    DeliverabilityItem(
+                        key = "attachments",
+                        title = "پیوست‌ها و محتوای صف ارسال",
                         severity = CheckSeverity.PASS,
-                        detail = "همه ${queuedMessages.size} پیام دارای پیوست PDF تاییدشده با سقف مجاز (${AttachmentGuard.MAX_PER_FILE_BYTES / 1024 / 1024}MB) هستند."
+                        detail = "همه ${queuedMessages.size} پیام دارای پیوست PDF تاییدشده با سقف مجاز (${AttachmentGuard.MAX_PER_FILE_BYTES / 1024 / 1024}MB/فایل و ۲۰MB کل) هستند."
                     )
                 )
             }

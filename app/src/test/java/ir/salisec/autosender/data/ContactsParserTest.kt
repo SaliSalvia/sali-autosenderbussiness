@@ -73,4 +73,12 @@ class ContactsParserTest {
         assertEquals("Sarah", list[4].name)
         assertEquals("beta.com", list[4].domain)
     }
+
+    @Test
+    fun detectsHeaderLinesWithoutFalseInvalidFlags() {
+        assertTrue(ContactsParser.isHeaderLine("domain,email,name"))
+        assertTrue(ContactsParser.isHeaderLine("دامنه,ایمیل,نام"))
+        assertTrue(ContactsParser.isHeaderLine("email"))
+        assertFalse(ContactsParser.isHeaderLine("not-an-email"))
+    }
 }

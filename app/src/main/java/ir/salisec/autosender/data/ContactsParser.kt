@@ -15,6 +15,13 @@ object ContactsParser {
         "hello", "team", "service", "noreply", "no-reply", "billing", "help"
     )
 
+    fun isHeaderLine(rawLine: String): Boolean {
+        val low = rawLine.trim().trim(',', '،', ';').lowercase()
+        return low.startsWith("domain,") || low.startsWith("domain;") ||
+            low.startsWith("دامنه") || low.startsWith("email,") ||
+            low.startsWith("ایمیل,") || low == "email" || low == "ایمیل"
+    }
+
     fun parse(raw: String): List<Contact> {
         val out = linkedMapOf<String, Contact>()
         fun addContact(domain: String, email: String, name: String?) {
@@ -34,12 +41,7 @@ object ContactsParser {
 
         for (rawLine in raw.lines()) {
             val l = rawLine.trim().trim(',', '،', ';')
-            if (l.isEmpty()) continue
-            val low = l.lowercase()
-            if (low.startsWith("domain,") || low.startsWith("domain;") ||
-                low.startsWith("دامنه") || low.startsWith("email,") ||
-                low.startsWith("ایمیل,") || low == "email" || low == "ایمیل"
-            ) continue
+            if (l.isEmpty() || isHeaderLine(l)) continue
 
             // Format: "Ali Reza <ali@example.com>"
             val angle = angleBracketRegex.matchEntire(l)

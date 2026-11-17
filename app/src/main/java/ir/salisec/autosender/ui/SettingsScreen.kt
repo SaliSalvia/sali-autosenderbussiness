@@ -413,6 +413,30 @@ fun SettingsScreen(
                     s = s.copy(dailyCap = (it.toIntOrNull() ?: 100).coerceIn(1, 500)); saved = false
                 }
             }
+
+            FilterChip(
+                selected = s.enforceBusinessHours,
+                onClick = { s = s.copy(enforceBusinessHours = !s.enforceBusinessHours); saved = false },
+                label = { Text("ارسال فقط در ساعات اداری (پیشنهاد B2B)") }
+            )
+            if (s.enforceBusinessHours) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LabeledField("شروع ساعت کاری (۰-۲۳)", s.businessStartHour.toString(), modifier = Modifier.weight(1f)) {
+                        s = s.copy(businessStartHour = (it.toIntOrNull() ?: 9).coerceIn(0, 23)); saved = false
+                    }
+                    LabeledField("پایان ساعت کاری (۱-۲۴)", s.businessEndHour.toString(), modifier = Modifier.weight(1f)) {
+                        s = s.copy(businessEndHour = (it.toIntOrNull() ?: 17).coerceIn(1, 24)); saved = false
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                LabeledField("یادآور پیگیری اول (روز)", s.followUpDays1.toString(), modifier = Modifier.weight(1f)) {
+                    s = s.copy(followUpDays1 = (it.toIntOrNull() ?: 2).coerceIn(1, 30)); saved = false
+                }
+                LabeledField("یادآور پیگیری دوم (روز)", s.followUpDays2.toString(), modifier = Modifier.weight(1f)) {
+                    s = s.copy(followUpDays2 = (it.toIntOrNull() ?: 7).coerceIn(1, 60)); saved = false
+                }
+            }
         }
 
         // 6. Attachment Policy

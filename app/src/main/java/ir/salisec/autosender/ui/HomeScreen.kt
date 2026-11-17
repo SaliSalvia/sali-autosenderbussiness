@@ -1,6 +1,5 @@
 package ir.salisec.autosender.ui
 
-import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,13 +18,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Outbox
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -50,21 +49,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import ir.salisec.autosender.App
 import ir.salisec.autosender.R
-import ir.salisec.autosender.send.SendService
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(app: App, go: (Screen) -> Unit) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val sendState by app.engine.state.collectAsState()
     val contacts by app.session.contacts.collectAsState()
@@ -72,6 +70,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
     val deliverability by app.session.deliverability.collectAsState()
     var pendingCount by remember { mutableIntStateOf(0) }
     var sentTotal by remember { mutableIntStateOf(0) }
+    var totalTokens by remember { mutableIntStateOf(0) }
     var showSendConfirm by remember { mutableStateOf(false) }
     val settings = remember(sendState.running) { app.prefs.load() }
 
@@ -80,6 +79,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
             val all = app.db.messageDao().all()
             pendingCount = all.count { it.status == "APPROVED" || it.status == "QUEUED" }
             sentTotal = all.count { it.status == "SENT" }
+            totalTokens = all.sumOf { it.promptTokens + it.completionTokens }
         }
     }
 
@@ -166,7 +166,10 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
             ) {
                 MetricTile("مخاطب فعال", contacts.size.toString(), Modifier.weight(1f))
                 MetricTile("آماده ارسال", pendingCount.toString(), Modifier.weight(1f))
-                MetricTile("ارسال‌شده کل", sentTotal.toString(), Modifier.weight(1f))
+                MetricTile("ارسال‌شده", sentTotal.toString(), Modifier.weight(1f))
+                if (totalTokens > 0) {
+                    MetricTile("توکن کل", totalTokens.toString(), Modifier.weight(1f))
+                }
             }
 
             BigButton(
@@ -189,7 +192,12 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
             badgeColor = if (sendState.running) GreenOk else MaterialTheme.colorScheme.primary
         ) {
             Text(stringResource(R.string.home_bulk_hint), style = MaterialTheme.typography.bodySmall)
-            if (sendState.running) {
+            if (sendState.waitingForBusinessHours && !sendState.running) {
+                val resumeAt = sendState.waitingUntil?.let {
+                    SimpleDateFormat("HH:mm", Locale.US).format(Date(it))
+                } ?: ""
+                Chip("در انتظار شروع ساعات کاری ($resumeAt) برای ارسال خودکار", OrangeWarn, onClick = { go(Screen.Send) })
+            } else if (sendState.running) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 SubTitle(
                     if (sendState.paused) stringResource(R.string.home_paused)
@@ -212,7 +220,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                         .testTag("home_bulk_send"),
                     shape = RoundedCornerShape(14.dp)
                 ) {
-                    Icon(Icons.Default.Send, contentDescription = null)
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(
                         if (pendingCount > 0) stringResource(R.string.home_send_all) + " ($pendingCount)"
@@ -266,22 +274,38 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
     }
 
     if (showSendConfirm) {
+        val dr = deliverability
+        val confirmBody = buildString {
+            append(stringResource(R.string.home_confirm_body)).append(" ($pendingCount)")
+            if (dr == null) {
+                append("\n\n⚠️ تست ضداسپم (SPF/DKIM/DMARC) هنوز اجرا نشده است. پیشنهاد می‌شود قبل از ارسال انبوه یک‌بار بررسی کنید.")
+            } else if (dr.hasCriticalFailure) {
+                append("\n\n⚠️ هشدار ضداسپم: ").append(dr.failCount)
+                    .append(" خطای بحرانی روی دامنه فرستنده یا اتصال وجود دارد.")
+            }
+        }
         AlertDialog(
             onDismissRequest = { showSendConfirm = false },
             title = { Text(stringResource(R.string.home_confirm_title)) },
-            text = { Text(stringResource(R.string.home_confirm_body) + " ($pendingCount)") },
+            text = { Text(confirmBody) },
             confirmButton = {
                 Button(onClick = {
                     showSendConfirm = false
-                    ContextCompat.startForegroundService(
-                        context, Intent(context, SendService::class.java)
-                    )
+                    app.engine.enqueueWork()
                     go(Screen.Send)
-                }) { Text(stringResource(R.string.home_confirm_ok)) }
+                }) { Text(if (dr?.hasCriticalFailure == true) "ارسال با مسئولیت خودم" else stringResource(R.string.home_confirm_ok)) }
             },
             dismissButton = {
-                TextButton(onClick = { showSendConfirm = false }) {
-                    Text(stringResource(R.string.home_confirm_review))
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (dr == null || dr.hasCriticalFailure) {
+                        TextButton(onClick = {
+                            showSendConfirm = false
+                            go(Screen.Send)
+                        }) { Text("بررسی ضداسپم") }
+                    }
+                    TextButton(onClick = { showSendConfirm = false }) {
+                        Text(stringResource(R.string.home_confirm_review))
+                    }
                 }
             }
         )

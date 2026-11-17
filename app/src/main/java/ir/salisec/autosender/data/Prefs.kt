@@ -56,6 +56,12 @@ data class Settings(
     val delaySeconds: Int = 75,
     val jitterSeconds: Int = 25,
     val dailyCap: Int = 100,
+    val enforceBusinessHours: Boolean = false,
+    val businessStartHour: Int = 9,
+    val businessEndHour: Int = 17,
+    // follow-up sequence cadence (days)
+    val followUpDays1: Int = 2,
+    val followUpDays2: Int = 7,
     // attachment policy
     val enforceTrialAttachments: Boolean = true,
     val maxAttachmentMb: Int = 4,
@@ -132,6 +138,11 @@ class Prefs(context: Context) {
         delaySeconds = sp.getInt("delaySeconds", 75),
         jitterSeconds = sp.getInt("jitterSeconds", 25),
         dailyCap = sp.getInt("dailyCap", 100),
+        enforceBusinessHours = sp.getBoolean("enforceBusinessHours", false),
+        businessStartHour = sp.getInt("businessStartHour", 9).coerceIn(0, 23),
+        businessEndHour = sp.getInt("businessEndHour", 17).coerceIn(1, 24),
+        followUpDays1 = sp.getInt("followUpDays1", 2).coerceIn(1, 30),
+        followUpDays2 = sp.getInt("followUpDays2", 7).coerceIn(1, 60),
         enforceTrialAttachments = sp.getBoolean("enforceTrialAttachments", true),
         maxAttachmentMb = sp.getInt("maxAttachmentMb", 4).coerceIn(1, 4),
         unsubscribeFooter = sp.getString("unsubscribeFooter", DEFAULT_FOOTER)!!.ifBlank { DEFAULT_FOOTER },
@@ -179,17 +190,22 @@ class Prefs(context: Context) {
             .putInt("delaySeconds", s.delaySeconds)
             .putInt("jitterSeconds", s.jitterSeconds)
             .putInt("dailyCap", s.dailyCap)
+            .putBoolean("enforceBusinessHours", s.enforceBusinessHours)
+            .putInt("businessStartHour", s.businessStartHour.coerceIn(0, 23))
+            .putInt("businessEndHour", s.businessEndHour.coerceIn(1, 24))
+            .putInt("followUpDays1", s.followUpDays1.coerceIn(1, 30))
+            .putInt("followUpDays2", s.followUpDays2.coerceIn(1, 60))
             .putBoolean("enforceTrialAttachments", s.enforceTrialAttachments)
             .putInt("maxAttachmentMb", s.maxAttachmentMb)
             .putString("unsubscribeFooter", s.unsubscribeFooter)
             .putString("suppressed", s.suppressed)
             .putString("sitestFolderUri", s.sitestFolderUri)
-            .commit()
+            .apply()
     }
 
     /** PRIVACY.md "delete all data": wipes every encrypted setting. */
     fun clear() {
-        sp.edit().clear().commit()
+        sp.edit().clear().apply()
     }
 
     private fun normalizeHcnsEndpoint(v: String?): String {
@@ -231,7 +247,7 @@ class Prefs(context: Context) {
         val e = entry.trim().lowercase()
         if (e.isEmpty()) return
         val next = (suppressedSet() + e).joinToString(",")
-        sp.edit().putString("suppressed", next).commit()
+        sp.edit().putString("suppressed", next).apply()
     }
 
     companion object {

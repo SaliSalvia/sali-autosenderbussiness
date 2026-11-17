@@ -127,8 +127,14 @@ object ReportReader {
     fun jsonIn(folder: DocumentFile): DocumentFile? =
         folder.listFiles().firstOrNull { it.isFile && it.name?.lowercase()?.endsWith(".json") == true }
 
-    /** Main entry: read newest PDFs (up to 6 for speed, always including the 2 newest attached PDFs) + optional JSON sidecar. */
-    fun readBundle(context: Context, domain: String, folder: DocumentFile): ReportBundle {
+    /** Main entry: read newest PDFs (up to 6 for speed, always including the 2 newest attached PDFs) + optional JSON sidecar.
+     *  Uses Room [pdfCacheDao] when available so unchanged PDFs are not re-parsed by PDFBox. */
+    suspend fun readBundle(
+        context: Context,
+        domain: String,
+        folder: DocumentFile,
+        pdfCacheDao: PdfCacheDao? = null
+    ): ReportBundle {
         val warnings = mutableListOf<String>()
         val docs = mutableListOf<PdfDoc>()
 
@@ -148,10 +154,33 @@ object ReportReader {
             val name = f.name ?: "report.pdf"
             val mod = f.lastModified()
             val len = f.length()
+            val uriStr = f.uri.toString()
+
+            val cached = try {
+                pdfCacheDao?.get(uriStr)?.takeIf {
+                    it.lastModified == mod && it.sizeBytes == len && (it.pages == null || it.pages > 0)
+                }
+            } catch (_: Exception) { null }
+
+            if (cached != null) {
+                docs.add(
+                    PdfDoc(
+                        name = name,
+                        uri = uriStr,
+                        pages = cached.pages,
+                        text = cached.text,
+                        readOk = true,
+                        lastModified = mod,
+                        sizeBytes = len
+                    )
+                )
+                continue
+            }
+
             try {
                 val stream = context.contentResolver.openInputStream(f.uri)
                 if (stream == null) {
-                    docs.add(PdfDoc(name, f.uri.toString(), readOk = false, lastModified = mod, sizeBytes = len))
+                    docs.add(PdfDoc(name, uriStr, readOk = false, lastModified = mod, sizeBytes = len))
                     warnings.add("باز کردن $name ناموفق بود")
                     continue
                 }
@@ -166,7 +195,7 @@ object ReportReader {
                         docs.add(
                             PdfDoc(
                                 name = name,
-                                uri = f.uri.toString(),
+                                uri = uriStr,
                                 pages = pages,
                                 text = text,
                                 readOk = true,
@@ -174,11 +203,24 @@ object ReportReader {
                                 sizeBytes = len
                             )
                         )
+                        try {
+                            pdfCacheDao?.upsert(
+                                PdfCacheEntity(
+                                    uri = uriStr,
+                                    name = name,
+                                    lastModified = mod,
+                                    sizeBytes = len,
+                                    pages = pages,
+                                    text = text,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            )
+                        } catch (_: Exception) { }
                         if (text.isBlank()) warnings.add("متنی از «$name» استخراج نشد (فایل پیوست همچنان ارسال می‌شود)")
                     }
                 }
             } catch (e: Exception) {
-                docs.add(PdfDoc(name, f.uri.toString(), readOk = false, lastModified = mod, sizeBytes = len))
+                docs.add(PdfDoc(name, uriStr, readOk = false, lastModified = mod, sizeBytes = len))
                 warnings.add("پردازش «$name» ناموفق: " + (e.message?.take(80) ?: ""))
             }
         }
