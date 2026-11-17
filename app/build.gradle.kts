@@ -77,10 +77,10 @@ kotlin {
 dependencies {
     // Pinned to the set that already produced a green APK. Major upgrades are
     // intentionally not auto-merged: see root build.gradle.kts and dependabot.yml.
-    implementation("androidx.core:core-ktx:1.16.0")
+    implementation("androidx.core:core-ktx:1.19.1")
     implementation("androidx.activity:activity-compose:1.9.3")
 
-    val composeBom = platform("androidx.compose:compose-bom:2025.12.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
