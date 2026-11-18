@@ -212,10 +212,10 @@ object AttachmentPolicy {
                     pairKey(en.name) == pairKey(fa.name)
             }.map { en -> fa to en }
         }
-        val selected = pairs.maxByOrNull {
-            minOf(effectiveRecency(it.first), effectiveRecency(it.second))
-        } ?: return emptyList()
-        return listOf(selected.first, selected.second)
+        return pairs
+            .sortedByDescending { minOf(effectiveRecency(it.first), effectiveRecency(it.second)) }
+            .flatMap { listOf(it.first, it.second) }
+            .distinctBy { it.uri }
     }
 
     /** Selects only a readable, matching two-page Persian/English trial pair. */
