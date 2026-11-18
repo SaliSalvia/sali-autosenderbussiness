@@ -62,3 +62,19 @@ Each subsequent change must pass the pull request CI gate. Do not mark the work 
 - Enforcing a numeric JaCoCo coverage threshold for the domain layer.
 
 **Release decision:** this PR materially hardens attachment correctness and campaign persistence, but it is not by itself a production release approval.
+
+
+## Release hardening candidate — 2026-11-18
+
+**Branch:** `release/hardening-polish`  
+**Target version:** `2.0.1` / `versionCode 4`
+
+- Send-time evidence freshness is enforced: the selected SAF tree is reopened, the matching domain folder is resolved again, PDFs are reparsed without the Room PDF cache, and the current evidence fingerprint plus exact bilingual attachment URI/name order are compared to the approval snapshot. Any mismatch or permission loss skips the message and requires a fresh scan and human approval.
+- Test-to-self attachments now use the same strict two-page bilingual trial-pair, PDF structure, per-file and total-size validation. A no-attachment preview remains supported.
+- Candidate selection returns only the newest matching Persian/English filename family before applying the six-PDF parsing cap.
+- Snapshot read limits agree with the byte guard: exact 4 MiB is permitted; larger files are rejected.
+- Added pure regression tests for evidence fingerprint freshness, attachment identity/name/order, newest-pair priority, and the exact 4 MiB boundary.
+
+**Validation:** pending a fresh PR CI run. These changes have not yet been verified by CI or on a physical Android 16 device.
+
+**Remaining public-release blockers:** unchecked items in `docs/RELEASE_CHECKLIST.md`, including real-world anonymized Golden Set, end-to-end human-approval test, provider/network fault tests, per-recipient consent basis, SPF/DKIM/DMARC verification, production upload-key/Play App Signing, Android 16 device coverage, and rollout/rollback validation.
