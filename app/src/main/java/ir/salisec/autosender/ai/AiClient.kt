@@ -227,7 +227,7 @@ class AiClient(private val client: OkHttpClient) {
         // Previous drafts and customer replies are context, never numeric evidence for new claims.
         val allowed = QualityGate.allowedNumbers(bundle)
         val nonClaimIdentifiers = listOfNotNull(bundle?.domain, domain, email)
-            .map { it.trim() }.filter { it.isNotBlank() }.toSet()
+            .map { it.trim() }.filter { it.isNotBlank() }.sortedByDescending { it.length }.toSet()
         val facts = buildFacts(
             s, bundle, context, aggregate, contactName, style,
             isFollowUp, previousBody, domain, customerReplyText
@@ -348,7 +348,7 @@ class AiClient(private val client: OkHttpClient) {
         // Previous drafts and customer replies are context, never numeric evidence for new claims.
         val allowed = QualityGate.allowedNumbers(bundle)
         val nonClaimIdentifiers = listOfNotNull(bundle?.domain, domain, email)
-            .map { it.trim() }.filter { it.isNotBlank() }.toSet()
+            .map { it.trim() }.filter { it.isNotBlank() }.sortedByDescending { it.length }.toSet()
         return QualityGate.validate(result, s, allowed, isFollowUp, nonClaimIdentifiers)
     }
 
