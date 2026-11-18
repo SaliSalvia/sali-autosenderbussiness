@@ -116,6 +116,7 @@ jobs:
 
       - name: Validate release signing configuration
         id: signing
+        if: github.event_name != 'pull_request'
         env:
           SALI_KEYSTORE_BASE64: ${{ secrets.SALI_KEYSTORE_BASE64 }}
           SALI_KEYSTORE_PASSWORD: ${{ secrets.SALI_KEYSTORE_PASSWORD }}
@@ -139,7 +140,8 @@ jobs:
             exit 1
           fi
 
-      - name: Build release APK and AAB (R8 on; signed only when all four signing secrets are configured)
+      - name: Build signed release APK and AAB (R8 on)
+        if: steps.signing.outputs.production_signed == 'true'
         env:
           SALI_KEYSTORE_BASE64: ${{ secrets.SALI_KEYSTORE_BASE64 }}
           SALI_KEYSTORE_PASSWORD: ${{ secrets.SALI_KEYSTORE_PASSWORD }}
@@ -148,16 +150,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ steps.signing.outputs.production_signed }}" == "true" ]]; then
-            printf '%s' "$SALI_KEYSTORE_BASE64" | base64 --decode > sali.keystore
-            ./gradlew --no-daemon assembleRelease bundleRelease --stacktrace \
-              -Pandroid.injected.signing.store.file="$PWD/sali.keystore" \
-              -Pandroid.injected.signing.store.password="$SALI_KEYSTORE_PASSWORD" \
-              -Pandroid.injected.signing.key.alias="$SALI_KEY_ALIAS" \
-              -Pandroid.injected.signing.key.password="$SALI_KEY_PASSWORD" 2>&1 | tee release.log
-          else
-            ./gradlew --no-daemon assembleRelease bundleRelease --stacktrace 2>&1 | tee release.log
-          fi
+          trap 'rm -f sali.keystore' EXIT
+          printf '%s' "$SALI_KEYSTORE_BASE64" | base64 --decode > sali.keystore
+          test -s sali.keystore
+          ./gradlew --no-daemon assembleRelease bundleRelease --stacktrace \
+            -Pandroid.injected.signing.store.file="$PWD/sali.keystore" \
+            -Pandroid.injected.signing.store.password="$SALI_KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$SALI_KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$SALI_KEY_PASSWORD" 2>&1 | tee release.log
+
+      - name: Build unsigned release APK and AAB (CI validation only)
+        if: steps.signing.outputs.production_signed != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon assembleRelease bundleRelease --stacktrace 2>&1 | tee release.log
 
       - name: Collect build artifacts without mislabeling unsigned outputs
         shell: bash
