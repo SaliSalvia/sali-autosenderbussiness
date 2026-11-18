@@ -789,7 +789,7 @@ fun CampaignStudioScreen(
                     badge = "الزامی (۱ بار)",
                     badgeColor = OrangeWarn
                 ) {
-                    SubTitle("برای تطبیق خودکار ایمیل‌ها با پوشه سایت‌ها و پیوست ۲ فایل PDF جدیدترین، پوشه sitest در حافظه داخلی گوشی را یک‌بار انتخاب کنید.")
+                    SubTitle("برای تطبیق ایمیل‌ها با پوشه دامنه و انتخاب جفت Trial معتبر فارسی و انگلیسی (هرکدام دقیقاً ۲ صفحه)، پوشه sitest را یک‌بار انتخاب کنید.")
                     BigButton(
                         text = "انتخاب پوشه sitest",
                         icon = Icons.Default.FolderOpen,
@@ -800,7 +800,7 @@ fun CampaignStudioScreen(
                 }
             } else {
                 Section(
-                    header = "تطبیق خودکار پوشه و انتخاب ۲ PDF جدیدترین",
+                    header = "تطبیق پوشه و انتخاب جفت Trial دوزبانه",
                     icon = Icons.Default.FolderOpen,
                     badge = if (matches.isNotEmpty()) "${matches.count { it.readyForApproval }} از ${matches.size} آماده" else "متصل",
                     badgeColor = if (matches.any { it.readyForApproval }) GreenOk else MaterialTheme.colorScheme.primary
@@ -828,7 +828,7 @@ fun CampaignStudioScreen(
 
                     scanError?.let { Chip(it, RedErr) }
                     if (scanning) {
-                        LoadingBox("در حال جستجوی خودکار پوشه‌ها و استخراج ۲ PDF جدیدترین...")
+                        LoadingBox("در حال جستجوی پوشه‌ها و بررسی جفت Trial فارسی/انگلیسی...")
                     } else if (matches.isNotEmpty()) {
                         // Search, status filter & bulk selection controls
                         LabeledField(
@@ -1260,7 +1260,7 @@ private fun DraftReviewCard(
 
             AnimatedVisibility(visible = expanded) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Attached 2 newest PDFs preview (tappable to open in-app PDF viewer)
+                    // Verified bilingual two-page trial pair preview (tappable to open in-app PDF viewer)
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
