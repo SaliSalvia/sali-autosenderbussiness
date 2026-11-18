@@ -58,13 +58,12 @@
 `clean test lintDebug assembleDebug assembleRelease bundleRelease` (JDK 17، Gradle پینشده `8.13`،
 نصب صریح `platforms;android-36` / `build-tools;36.0.0`).
 
-خروجی در artifact **`SaliBussiness-APK`**:
-`SaliBussiness.apk`، `SaliBussiness-debug.apk`، `SaliBussiness.aab` و `SHA256SUMS.txt`.
-روی `main` انتشار خودکار Release با تگ `latest` هم انجام میشود.
+خروجی artifact **`SaliBussiness-APK`**:
+- همیشه: `SaliBussiness-debug.apk` و `SHA256SUMS.txt`.
+- فقط با هر چهار secret امضای تولیدی: `SaliBussiness.apk` و `SaliBussiness.aab` (امضاشده).
+- بدون secretهای امضا: `SaliBussiness-unsigned-release.apk` و `SaliBussiness-unsigned-release.aab`؛ این فایلها فقط برای اعتبارسنجی build هستند و برای نصب/آپلود Play مناسب نیستند.
 
-- بدون سیکرت، APK دیباگ نصبپذیر است و `SaliBussiness.apk` کپی همان بیلد دیباگ است — **هرگز بهعنوان ریلیس امضاشده معرفی نمیشود**.
-- با چهار سیکرت `SALI_KEYSTORE_BASE64`, `SALI_KEYSTORE_PASSWORD`, `SALI_KEY_ALIAS`, `SALI_KEY_PASSWORD`
-  نسخه release امضاشده ساخته میشود.
+GitHub Release با تگ `latest` یا تگ نسخه‌ای `v*` **فقط زمانی منتشر می‌شود که هر چهار secret** `SALI_KEYSTORE_BASE64`, `SALI_KEYSTORE_PASSWORD`, `SALI_KEY_ALIAS`, `SALI_KEY_PASSWORD` به‌طور کامل تنظیم شده باشند. تنظیم ناقص secretها باعث شکست کنترل‌شده CI می‌شود؛ APK دیباگ هرگز با نام Release تولیدی منتشر نمی‌شود.
 - هنگام شکست، artifact `build-logs` حاوی `checks.log` / `build.log` / `release.log` و گزارشهای lint/test آپلود میشود.
 - ابزار ساخت pin شده است (`build.gradle.kts` + `gradle/wrapper/gradle-wrapper.properties`)؛
   ارتقای majorـهای AGP/Gradle/Kotlin باید **هماهنگ** و طی یک PR با بیلد سبز انجام شود، نه تکبهتک توسط Dependabot.
