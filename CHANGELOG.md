@@ -1,12 +1,27 @@
 # Changelog
 
 همه تغییرات قابلتوجه این پروژه در این فایل ثبت میشود. قالب بر اساس [Keep a Changelog](https://keepachangelog.com/fa/1.1.0/) و نسخهدهی [Semantic Versioning](https://semver.org/lang/fa/) است.
-> ✅ همگامسازی انجام شد: `versionCode = 3` و `versionName = "2.0.0"` در `app/build.gradle.kts` (پیشتر `1 / 1.0.0` بود). بند فاز ۰ نقشه راه بسته شد.
+> ✅ همگامسازی انجام شد: `versionCode = 4` و `versionName = "2.0.1"` در `app/build.gradle.kts` (پیشتر `1 / 1.0.0` بود). بند فاز ۰ نقشه راه بسته شد.
 
-## [Unreleased] — سختسازی 2.1 / Hardening (versionCode 3)
+## [2.0.1] — 2026-11-18 · Release hardening candidate
+
+### Fixed
+- پیش از ارسال، بسته شواهد از پوشه انتخاب‌شده دوباره خوانده می‌شود؛ هش کامل SHA-256 و هویت/ترتیب جفت PDF با وضعیت زمان تأیید مقایسه می‌شود. تغییر شواهد، مجوز از دست‌رفته یا تغییر پیوست باعث توقف امن پیام می‌شود.
+- ایمیل تست به صندوق فرستنده نیز نام، نوع، تعداد صفحات و حجم پیوست را دوباره اعتبارسنجی می‌کند؛ تست بدون پیوست همچنان مجاز است.
+- انتخاب نامزدهای پیوست فقط بهترین جفت Trial هم‌خانواده را پیش از سقف شش فایل اولویت می‌دهد.
+- محدودیت خواندن PDF با Guard همسان شد: فایل دقیقاً ۴MB مجاز است و فقط فایل بزرگ‌تر رد می‌شود.
+
+### Tests
+- تست‌های خالص برای هش شواهد، تغییر هویت پیوست، نام/ترتیب فایل‌ها و انتخاب بهترین جفت.
+- تست مرزی برای فایل دقیقاً در حد ۴MB.
+
+### Release status
+این یک candidate سخت‌سازی است، نه اعلام Go برای انتشار عمومی. اجرای تازه CI و تست دستگاهی Android 16 هنوز لازم است. رضایت/مبنای مجاز مخاطبان، SPF/DKIM/DMARC، کلید امضای Play و دیگر موانع P0 در `docs/RELEASE_CHECKLIST.md` باز می‌مانند.
+
+## [Unreleased] — hardening follow-up (versionCode 4)
 ### Fixed — رگرسیون `main`
 - **بیلد شکسته `main` رفع شد.** PRهای Dependabot بدون اینکه CI روی `pull_request` اجرا شود ادغام شده بودند و `AGP 9.5.0` + `Kotlin 2.4.21` + `Gradle 8.9` + `core-ktx 1.19.1` را روی `compileSdk 34` گذاشته بودند. AGP 9.5 به Gradle ≥ 9.6 و built-in Kotlin نیاز دارد و `core-ktx 1.19.1` به `compileSdk ≥ 37`.
-- ابزار ساخت به یک مجموعه **سازگار و پینشده** برگشت/ارتقا یافت: AGP `8.9.1` + Gradle `8.11.1` + Kotlin `2.0.21` + `compileSdk/targetSdk = 36` + `buildTools 36.0.0` + Compose BOM `2024.10.01`.
+- ابزار ساخت به یک مجموعه **سازگار و پینشده** برگشت/ارتقا یافت: AGP `8.13.2` + Gradle `8.13` + Kotlin `2.2.21` + `compileSdk/targetSdk = 36` + `buildTools 36.0.0` + Compose BOM `2025.12.00`.
 - workflow اکنون روی `pull_request` به `main` و تگهای `v*` هم اجرا میشود؛ `dependabot.yml` از merge تکبهتک major ابزار ساخت جلوگیری میکند.
 
 ### Added — ایمنی ارسال و پایداری
@@ -28,7 +43,7 @@
 - `allowBackup=false`، `usesCleartextTraffic=false`، `res/xml/network_security_config.xml` و `res/xml/data_extraction_rules.xml` (حذف cloud backup / device transfer در Android 12+).
 - «پاکسازی کامل دادههای اپ» در تنظیمات با دیالوگ تأیید: `App.clearAllData()` جداول `messages`/`logs`/`campaigns`، تنظیمات رمزنگاریشده و session را پاک میکند؛ `PRIVACY.md` FA/EN به همان نام دکمه بهروز شد.
 - `isMinifyEnabled=true` + `isShrinkResources=true` با قواعد R8 محافظهکارانه؛ `lint { abortOnError = false }` بهعنوان گزارش.
-- `versionCode = 3`, `versionName = "2.0.0"`, `targetSdk/compileSdk = 36` (الزام Play از ۲۰۲۶-۰۸-۳۱).
+- `versionCode = 4`, `versionName = "2.0.1"`, `targetSdk/compileSdk = 36` (الزام Play از ۲۰۲۶-۰۸-۳۱).
 - CI: `clean test lintDebug assembleDebug assembleRelease bundleRelease`، نصب صریح `platforms;android-36`، artifact `SaliBussiness-APK` شامل APK + AAB + `SHA256SUMS.txt`، Release `latest` فقط روی `main`، امضای ریلیس فقط با چهار سیکرت `SALI_KEYSTORE_*`.
 - `SECURITY.md` بهوضعیت جدید بهروز شد؛ [`PRIVACY.md`](PRIVACY.md) (FA/EN) و [`CONTRIBUTING.md`](CONTRIBUTING.md) اضافه شدند.
 
