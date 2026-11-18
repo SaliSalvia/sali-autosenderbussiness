@@ -4,7 +4,7 @@
 نسخه چکلیست: ۱٫۲ · ۲۰۲۶-۱۱-۱۸ · مرتبط با [`WORLD_CLASS_ROADMAP.md`](WORLD_CLASS_ROADMAP.md) · [`CHANGELOG.md`](../CHANGELOG.md)
 
 > ## 🔴 تصمیم فعلی: **No-Go برای انتشار عمومی / Play**
-> Candidate سخت‌سازی و UX `2.0.2`؛ فاز ۰ و بخش بزرگی از فاز ۱–۴ اجرا شده (بیلد سبز، تست واحد، idempotency، lease، migration،
+> Candidate نهایی سخت‌سازی `2.0.3` / versionCode 6 (این PR هنوز CI نشده است)؛ فاز ۰ و بخش بزرگی از فاز ۱–۴ اجرا شده (بیلد سبز، تست واحد، idempotency، lease، migration،
 > API 36، بکاپ/شبکه، R8، PRIVACY/SECURITY، AAB در CI)، ولی بندهای P0 زیر همچنان بازاند:
 > Golden Set واقعی، وبحوک bounce/complaint، تأیید SPF/DKIM/DMARC، رضایت مستند بهازای هر مخاطب،
 > Play App Signing، انتشار مرحلهای و تست دستگاه Android 16. «حذف همه دادهها» داخل اپ اکنون پیادهسازی شده است.
@@ -56,7 +56,7 @@
 - [x] تست واحد منطق دامنه: ContactsParser / DomainValidator / QualityGate / AttachmentPolicy / AttachmentGuard / MessageState / PrivacyRedactor / GoldenSet
 - [ ] پوشش تست ≥ ۷۰٪ اندازهگیری شود؛ `detekt`/`ktlint` اضافه شود
 - [ ] `libs.versions.toml`؛ `kapt` → KSP؛ `security-crypto` پایدار
-- [x] `versionCode = 5` / `versionName = 2.0.2` و `CHANGELOG.md` همخواناند
+- [ ] `versionCode = 6` / `versionName = 2.0.3` و `CHANGELOG.md` همخوان هستند؛ پس از CI سبز تأیید شود
 - [x] `isMinifyEnabled=true` + `isShrinkResources=true` و قواعد R8 در بیلد release CI تأیید میشوند
 - [x] Migration واقعی `MIGRATION_2_3` اضافه شد (fallback فقط برای نصبهای pre-v2 توسعهدهنده)
 - [ ] `MigrationTestHelper` و SBOM / بررسی CVE
