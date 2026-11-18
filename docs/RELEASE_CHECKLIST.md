@@ -4,11 +4,12 @@
 نسخه چکلیست: ۱٫۲ · ۲۰۲۶-۱۱-۱۸ · مرتبط با [`WORLD_CLASS_ROADMAP.md`](WORLD_CLASS_ROADMAP.md) · [`CHANGELOG.md`](../CHANGELOG.md)
 
 > ## 🔴 تصمیم فعلی: **No-Go برای انتشار عمومی / Play**
-> Candidate سخت‌سازی و UX `2.0.2`؛ فاز ۰ و بخش بزرگی از فاز ۱–۴ اجرا شده (بیلد سبز، تست واحد، idempotency، lease، migration،
+> Candidate نهایی سخت‌سازی `2.0.3` / versionCode 6 (این PR هنوز CI نشده است)؛ فاز ۰ و بخش بزرگی از فاز ۱–۴ اجرا شده (بیلد سبز، تست واحد، idempotency، lease، migration،
 > API 36، بکاپ/شبکه، R8، PRIVACY/SECURITY، AAB در CI)، ولی بندهای P0 زیر همچنان بازاند:
 > Golden Set واقعی، وبحوک bounce/complaint، تأیید SPF/DKIM/DMARC، رضایت مستند بهازای هر مخاطب،
 > Play App Signing، انتشار مرحلهای و تست دستگاه Android 16. «حذف همه دادهها» داخل اپ اکنون پیادهسازی شده است.
-> **استفاده داخلی کنترلشده با همین APK مجاز است.**
+> **استفاده داخلی کنترلشده با APK امضاشده CI مجاز است؛ اما Release نسخه‌ای `v2.0.2` در GitHub فعلاً هیچ asset ندارد. Release تاریخی `latest` هنوز فایل debug قدیمی دارد و منبع نسخه فعلی محسوب نمی‌شود.**
+
 
 ---
 
@@ -18,13 +19,16 @@
 - [ ] تست **انتهایهانتهای** «۰ ایمیل بدون تأیید انسان» روی دستگاه/امولاتور
 - [x] منطق idempotency (UUID پایدار، `duplicate_parameter` = موفقیت، `UNCERTAIN` بدون retry) — تست واحد `MessageStateTest`
 - [ ] تست شبیهسازی شبکه قابل اطمینان (timeout → دقیقاً ۰ ارسال تکراری) با FakeBrevo/MockWebServer
+- [ ] تست یکپارچه لغو صف و تغییر approval هم‌زمان با آماده‌سازی پیوست و در مرز provider call
 - [x] فقط ۲ فایل trial دوصفحهای (`_fa` + انگلیسی)؛ `%PDF`، `pages==2` و نامها روی بایتهای واقعی (`AttachmentGuard`)
 - [x] تازگی Evidence Pack در لحظه ارسال دوباره محاسبه و با هش زمان تأیید مقایسه می‌شود؛ هویت و ترتیب پیوست‌ها نیز دوباره تطبیق داده می‌شوند (`EvidenceApprovalGuard` + تست واحد)
 - [x] ایمیل تست به صندوق فرستنده در صورت داشتن پیوست، همان سیاست Trial دوصفحه‌ای و محدودیت اندازه را اجرا می‌کند
 - [x] حجم هر پیوست ≤ ۴MB و مجموع ≤ ۲۰MB (محدودیت مستند Brevo)
 - [x] `QualityGate` بعد از ویرایش دستی هم اجرا میشود؛ دکمه تأیید تا عبور گیت غیرفعال است
+- [ ] تست prompt-injection: دستورهای جاسازی‌شده در PDF، sidecar، You.com، قالب مرجع و متن پاسخ مشتری باید صرفاً داده تلقی و نادیده گرفته شوند
 - [x] خط opt-out و `Re:/Fwd:` جعلی/فوریت ساختگی توسط `QualityGate` مسدودند (تست واحد)
-- [x] فهرست عدم ارسال پیش از هر ارسال و در صف بررسی میشود (`InboxScreen` + `SendEngine`)
+- [x] فهرست عدم ارسال در صف و دوباره بلافاصله پیش از درخواست provider بررسی می‌شود (`SendEngine` + `SendPreflightGuard`)
+- [ ] تست race-condition: افزودن opt-out یا ویرایش approval در زمان پردازش PDF و درست پیش از provider call
 - [x] هیچ ادعای «تضمین رسیدن به اینباکس»، مهلت ساختگی، تخفیف یا تهدید در پرامپت/متن نمونه نیست
 
 ## ۲. پایداری (P0)
@@ -41,7 +45,8 @@
 - [x] هیچ کلید API / ایمیل خام / متنی در لاگ، پیام خطا یا artifact نیست (`PrivacyRedactorTest` + ماسک لاگ/export)
 - [x] [`PRIVACY.md`](../PRIVACY.md) (FA/EN) منتشر شد؛ موجودی داده و طرفهای سوم (hcnsec/You.com/Brevo/IMAP) درج شد
 - [x] [`SECURITY.md`](../SECURITY.md) و مسیر گزارش خصوصی موجود است
-- [x] «پاکسازی کامل دادههای اپ» داخل تنظیمات با دیالوگ تأیید: `messages` + `logs` + `campaigns` + prefs رمزنگاریشده + session پاک میشوند (`SettingsScreen` / `App.clearAllData`)
+- [x] «پاکسازی کامل دادههای اپ» داخل تنظیمات با دیالوگ تأیید: صف ارسال ابتدا لغو می‌شود؛ `messages` / `logs` / `campaigns` / `studio_drafts` / `company_cache` / `pdf_cache`، prefs رمزنگاریشده و session پاک می‌شوند و دسترسی پایدار SAF آزاد می‌شود (`App.clearAllData`)
+- [x] ذخیره متن PDF در cache محلی `pdf_cache` در خط‌مشی حریم خصوصی افشا شده است؛ Room به‌صورت مستقل با SQLCipher رمز نشده است
 - [x] نگهداری لاگ عملیاتی روی دستگاه حداکثر ۹۰ روز است؛ هنگام شروع اپ، رکوردهای قدیمی‌تر به‌صورت خودکار حذف می‌شوند (`LogRetentionPolicy`, `LogDao.deleteBefore`)؛ فایل‌های exportشده‌ای که کاربر خارج از اپ ذخیره کرده باید جداگانه حذف شوند
 - [ ] رضایت/رابطه تجاری بهازای هر مخاطب ثبت میشود؛ فرم Data Safety تکمیل شده
 - [ ] SPF / DKIM / DMARC دامنه فرستنده تأیید و تست شدهاند
@@ -51,7 +56,7 @@
 - [x] تست واحد منطق دامنه: ContactsParser / DomainValidator / QualityGate / AttachmentPolicy / AttachmentGuard / MessageState / PrivacyRedactor / GoldenSet
 - [ ] پوشش تست ≥ ۷۰٪ اندازهگیری شود؛ `detekt`/`ktlint` اضافه شود
 - [ ] `libs.versions.toml`؛ `kapt` → KSP؛ `security-crypto` پایدار
-- [x] `versionCode = 5` / `versionName = 2.0.2` و `CHANGELOG.md` همخواناند
+- [ ] `versionCode = 6` / `versionName = 2.0.3` و `CHANGELOG.md` همخوان هستند؛ پس از CI سبز تأیید شود
 - [x] `isMinifyEnabled=true` + `isShrinkResources=true` و قواعد R8 در بیلد release CI تأیید میشوند
 - [x] Migration واقعی `MIGRATION_2_3` اضافه شد (fallback فقط برای نصبهای pre-v2 توسعهدهنده)
 - [ ] `MigrationTestHelper` و SBOM / بررسی CVE
@@ -64,7 +69,8 @@
 - [x] چهار Secret امضای تولیدی `SALI_KEYSTORE_*` تنظیم شده‌اند؛ CI run #100 هر چهار ورودی را تشخیص داد، APK را با `apksigner verify` تأیید کرد و AAB را ساخت.
 - [ ] **Play App Signing** در Play Console و تطبیق کلید آپلود با گواهی مورد انتظار تأیید شود.
 - [x] `SHA256SUMS.txt` برای خروجی Release تولید و در Artifactهای CI آپلود شد.
-- [ ] انتشار نسخه‌ای با تگ منطبق `vX.Y.Z` و فایل‌های APK/AAB امضاشده در GitHub Release نهایی شود؛ انتشارهای `main` به‌تنهایی Release نمی‌سازند.
+- [ ] انتشار نسخه‌ای بعدی با تگ منطبق (پس از افزایش نسخه/کد) و APK/AAB امضاشده در GitHub Release نهایی شود.
+> وضعیت موجود: `v2.0.2` به commit پیش از اصلاحات Release اشاره می‌کند و Release آن asset خالی است؛ تگ و Release را به‌زور جابه‌جا نکن. `latest` نیز صرفاً Release تاریخی با debug APK قدیمی است.
 - [ ] فهرست فروشگاه (FA/EN)، آیکون، اسکرینشات، Data Safety، دستهبندی
 - [ ] تست داخلی → انتشار مرحلهای ۱۰٪ → ۵۰٪ → ۱۰۰٪؛ **rollback آزمایش شد**
 - [ ] crash-free ≥ ۹۹٫۵٪ و ANR < ۰٫۵٪ در تست داخلی

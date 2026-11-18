@@ -56,3 +56,21 @@ object MessageState {
         ).any { t.contains(it) }
     }
 }
+
+
+/** Final, fail-closed check immediately before handing a message to the mail provider. */
+object SendPreflightGuard {
+    fun canSubmit(
+        cancelRequested: Boolean,
+        isSuppressed: Boolean,
+        approvalStillCurrent: Boolean,
+        status: String?,
+        leaseOwner: String?,
+        expectedLeaseOwner: String
+    ): Boolean =
+        !cancelRequested &&
+            !isSuppressed &&
+            approvalStillCurrent &&
+            status == MessageState.SENDING &&
+            leaseOwner == expectedLeaseOwner
+}

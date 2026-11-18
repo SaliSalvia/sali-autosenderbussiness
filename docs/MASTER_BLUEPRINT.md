@@ -121,10 +121,10 @@
 | UI | `PipelineScreen.kt` | خلاصه مراحل، چرخش وضعیت، **دیالوگ بازبینی پیگیری قبل از تأیید**، حذف |
 | UI | `SettingsScreen.kt` | همه کلیدها، مدلها، ویراستار، سقف فراخوانی، You.com، سیاست پیوست، opt-out، فهرست عدم ارسال |
 | UI | `Theme.kt` / `Screens.kt` | تم تیره M3، sealed ناوبری ۹ صفحهای |
-| ریشه | `App.kt` | DI ساده: Room v2، Prefs، AiClient، Enricher، InboxClient، SendEngine، CampaignSession، init PDFBox |
+| ریشه | `App.kt` | DI ساده: Room v6، Prefs، AiClient، Enricher، InboxClient، SendEngine، CampaignSession، init PDFBox |
 | ریشه | `MainActivity.kt` | مجوز نوتیفیکیشن ۱۳+، back-stack ساده، `BackHandler` |
 
-**پشته فنی:** minSdk 24 / target 34 / compileSdk 34، Java 17، AGP 8.5.2، Kotlin 2.0.21، Gradle 8.9، Room 2.6.1، OkHttp 4.12، `com.tom-roush:pdfbox-android:2.0.27.0`، `com.sun.mail:android-mail/android-activation:1.6.7`، Security-Crypto، DocumentFile.
+**پشته فنی فعلی (بر اساس فایل‌های build):** minSdk 24 / targetSdk 36 / compileSdk 36، build-tools 36.0.0، Java 17، AGP 8.13.2، Kotlin 2.2.21، Gradle 8.13، Room 2.8.5، OkHttp 4.12.0، `com.tom-roush:pdfbox-android:2.0.27.0`، `com.sun.mail:android-mail/android-activation:1.6.8`، Security-Crypto 1.1.0، DocumentFile 1.1.0 و WorkManager 2.12.0.
 
 ---
 
@@ -201,7 +201,7 @@ finalize(): امضا + خط opt-out به صورت قطعی اضافه میشود
 
 ## ۹. CI/CD و تاریخچه بیلدها
 
-**`.github/workflows/build-apk.yml`:** اجرا روی push به `main` و شاخههای `arena/**` + `workflow_dispatch`؛ JDK 17 Temurin + Gradle 8.9 (wrapper در زمان بیلد ساخته میشود، jar در ریپو نیست)؛ `assembleDebug` → APK نصبپذیر بدون سیکرت؛ در صورت وجود `SALI_KEYSTORE_BASE64 / SALI_KEYSTORE_PASSWORD / SALI_KEY_ALIAS / SALI_KEY_PASSWORD` ریلیس امضاشده؛ آپلود artifact و انتشار Release با تگ `latest` (فقط main)؛ **در صورت شکست، `build.log` به عنوان artifact `build-logs` آپلود میشود** تا دیگر نیازی به کپی دستی خطا نباشد.
+**`.github/workflows/build-apk.yml`:** اجرا روی push به `main` و `arena/**`، همه PRها به `main`، تگ‌های `v*` و `workflow_dispatch`؛ JDK 17 Temurin و Gradle 8.13 که از `gradle-wrapper.properties` خوانده می‌شود (wrapper در CI ساخته می‌شود). CI شامل `testDebugUnitTest`، `lintDebug`، `jacocoTestReport`، ساخت Debug APK و Release APK/AAB است. هر چهار Secret امضا برای ساخت signed release لازم‌اند؛ تگ نسخه‌ای باید دقیقاً با `versionName` برابر باشد. PR، `main` و `workflow_dispatch` فقط Artifactهای Actions می‌سازند؛ GitHub Release فقط از تگ تغییرناپذیر `vX.Y.Z` و با APK/AAB امضاشده + `SHA256SUMS.txt` منتشر می‌شود. APK دیباگ فقط در Artifactهای CI باقی می‌ماند.
 
 | بیلد | نتیجه | علت | اقدام |
 |---|---|---|---|
@@ -211,7 +211,7 @@ finalize(): امضا + خط opt-out به صورت قطعی اضافه میشود
 | #۴ | ❌ | **لاگ کامل از Actions خوانده شد**: ~۷۰ خطای `e:` — (الف) `LabeledField(label,value,onChange,multiline,singleLine)` با trailing lambda: کامپایلر lambda را به **آخرین پارامتر `Boolean`** نسبت داد → «No value passed for onChange / Function0 vs Boolean / Unresolved it» در `SettingsScreen`, `CampaignScreens`, `InboxScreen`؛ (ب) `ContactsParser.kt:4` escape نامعتبر `\.` (در Kotlin باید `\\.` یا `[.]` باشد)؛ (ج) `continue` داخل lambda ی `ifEmpty {}` (قابلیت آزمایشی) | `onChange` به **آخرین پارامتر** منتقل شد + تمام فراخوانیها به `onChange = ...` نامدار تبدیل شدند؛ regex ایمیل به `[.]`؛ `parse()` با حلقه معمولی و `continue` مجاز بازنویسی شد |
 | #۵ | ✅ | **نخستین بیلد سبز پروژه** (commit `bc65176`, ران ۴۱۵۵۲۹۷۹۷۷۴) | تمام موارد بالا اعمال شد؛ `assembleDebug` و `assembleRelease` موفق، APK نصبپذیر آپلود شد |
 
-**وضعیت بیلد:** ✅ **سبز** — [ران ۴۱۵۵۲۹۷۹۷۷۴](https://github.com/SaliSalvia/sali-autosenderbussiness/actions/runs/41552979774) در ۲۰۲۶-۱۱-۰۳: `Build debug APK` و `Build signed release APK` هر دو موفق؛ artifact `SaliBussiness-APK` شامل `SaliBussiness.apk` و `SaliBussiness-debug.apk` (هر کدام ۲۷ مگابایت، debugsigned چون سیکرت امضا تنظیم نشده) آپلود شد. هیچ خطای `e:` باقی نماند. Release با تگ `latest` فقط هنگام merge به `main` منتشر میشود.
+**وضعیت CI فعلی:** run #100 (`44306431606`) روی اصلاح امضای PR #29 موفق شد: Unit Tests، lint، Debug APK، signed Release APK و AAB همگی ساخته شدند؛ `apksigner verify` موفق و Artifact شامل APK/AAB و SHA256SUMS آپلود شد. PR #30 نیز Release را به انتشار فقط از تگ نسخه‌ای منطبق تغییر داد. تگ تاریخی `v2.0.2` فعلاً asset ندارد و `latest` Release قدیمی شامل APK debug است؛ این دو خروجی، نسخه فعلی قابل توزیع نیستند. کاندید فعلی `2.0.3` / `versionCode 6` در PR بازبینی نهایی قرار دارد و تا سبز شدن CI آن PR، تأییدشده محسوب نمی‌شود.
 
 ---
 

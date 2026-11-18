@@ -1,6 +1,8 @@
 package ir.salisec.autosender
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
 import androidx.room.Room
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import ir.salisec.autosender.ai.AiClient
@@ -184,6 +186,27 @@ class App : Application() {
     }
 
     suspend fun clearAllData() = withContext(Dispatchers.IO) {
+        // Stop queued delivery before erasing records/settings so no later queue
+        // iteration can submit another message after the user requested deletion.
+        engine.cancel()
+
+        // Release the persisted SAF grant as part of the in-app data-erasure flow.
+        val selectedTree = prefs.load().sitestFolderUri.trim()
+        if (selectedTree.isNotEmpty()) {
+            runCatching {
+                contentResolver.releasePersistableUriPermission(
+                    Uri.parse(selectedTree),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            runCatching {
+                contentResolver.releasePersistableUriPermission(
+                    Uri.parse(selectedTree),
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            }
+        }
+
         db.messageDao().clearAll()
         db.logDao().clearAll()
         campaignRepository.clear()
