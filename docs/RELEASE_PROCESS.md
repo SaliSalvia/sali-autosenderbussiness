@@ -1,0 +1,47 @@
+# فرایند انتشار نسخه‌ای SaliBussiness
+
+این سند، روش رسمی ساخت و انتشار نسخه‌های قابل توزیع را تعریف می‌کند.
+
+## قواعد
+
+1. هر Release عمومی باید یک نسخه مشخص و تغییرناپذیر با تگ `vX.Y.Z` داشته باشد.
+2. مقدار نسخه در تگ باید دقیقاً با `versionName` در `app/build.gradle.kts` برابر باشد. برای مثال، `versionName = "2.0.3"` فقط با تگ `v2.0.3` منتشر می‌شود.
+3. هر نسخه منتشرشده باید `versionCode` بزرگ‌تری از نسخه قبلی داشته باشد.
+4. تگ‌های نسخه‌ای منتشرشده را جابه‌جا یا بازنویسی نکن. برای هر اصلاح بعد از انتشار، نسخه جدید بساز.
+5. تگ قدیمی `latest` یک مرجع تاریخی است؛ workflow دیگر آن را به‌روزرسانی نمی‌کند.
+6. بیلدهای `main`، PR و `workflow_dispatch` فقط Artifactهای Actions هستند و Release عمومی نمی‌سازند.
+
+## مراحل انتشار
+
+1. در یک PR، `versionName` و `versionCode` را افزایش بده و `CHANGELOG.md` و اسناد نسخه را به‌روز کن.
+2. PR باید تمام مراحل CI را با موفقیت طی کند و سپس در `main` ادغام شود.
+3. پس از merge، مطمئن شو `main` همان نسخه را دارد و workflow ساخت روی آن سبز است.
+4. از commit موردنظر روی `main`، تگ نسخه‌ای بساز و push کن:
+
+   ```bash
+   git switch main
+   git pull --ff-only origin main
+   git tag -a vX.Y.Z -m "SaliBussiness vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+5. اجرای workflow با تگ، دوباره تست، lint، APK و AAB را می‌سازد. برای انتشار تگ نسخه‌ای، هر چهار Secret زیر الزامی‌اند:
+   - `SALI_KEYSTORE_BASE64`
+   - `SALI_KEYSTORE_PASSWORD`
+   - `SALI_KEY_ALIAS`
+   - `SALI_KEY_PASSWORD`
+
+6. workflow امضای APK را با `apksigner verify` بررسی می‌کند و فقط `SaliBussiness.apk`، `SaliBussiness.aab` و `SHA256SUMS.txt` را به Release اضافه می‌کند. APK دیباگ فقط Artifact آزمایشی CI است.
+7. با `make_latest: true`، GitHub جدیدترین Release نسخه‌ای را به‌عنوان Latest انتخاب می‌کند؛ نیازی به تگ متحرک `latest` نیست.
+
+## اگر Build یا انتشار شکست خورد
+
+- خطا را روی همان commit/tag بررسی کن.
+- تگ نسخه‌ای منتشرشده را force-move نکن.
+- اگر خود برنامه نیاز به اصلاح دارد، `versionCode` را افزایش بده و نسخه جدید منتشر کن.
+- اگر فقط زیرساخت CI نیاز به اصلاح دارد و هنوز Release ایجاد نشده، workflow را روی branch اصلاح کن؛ برای انتشار بعدی از تگ نسخه‌ای جدید و منطبق استفاده کن.
+- هیچ APK بدون امضای تولیدی معتبر نباید با نام Release عمومی منتشر شود.
+
+## محدودیت وضعیت فعلی
+
+سبز شدن CI و امضای معتبر فایل‌ها به‌تنهایی به معنی Go برای Google Play یا انتشار عمومی نیست. موارد باز در [چک‌لیست Go/No-Go](RELEASE_CHECKLIST.md)، به‌ویژه تست دستگاه واقعی Android 16، Play App Signing، رضایت مخاطبان و آزمون‌های انتهابه‌انتها، همچنان لازم‌الاجرا هستند.
