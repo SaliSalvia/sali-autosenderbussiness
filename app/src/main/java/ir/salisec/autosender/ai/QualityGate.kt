@@ -41,10 +41,10 @@ object QualityGate {
         if (bundle == null) return emptySet()
 
         val out = mutableSetOf<String>()
-        out.addAll(numbers(bundle.domain))
-        out.addAll(numbers(bundle.allText))
+        // Only readable PDF body text and parsed numeric report fields count as evidence.
+        // Domain identifiers, sidecar IDs, file metadata and recipient metadata do not.
+        out.addAll(numbers(bundle.pdfs.filter { it.readOk }.joinToString("\n") { it.text }))
         bundle.data?.let { d ->
-            out.addAll(numbers(d.domain))
             listOf(d.score, d.findings, d.critical, d.high, d.medium, d.low, d.subdomains)
                 .filterNotNull()
                 .forEach { out.add(it.toString()) }
@@ -76,7 +76,14 @@ object QualityGate {
             blockers.add("موضوع جعلی Re:/Fwd: ممنوع است")
         }
 
-        val used = numbers(all)
+        // Domains/emails and deterministic local signature/footer are identifiers, not numeric claims.
+        var numericClaimText = all
+        s.signature.trim().takeIf { it.isNotBlank() }?.let { numericClaimText = numericClaimText.replace(it, "") }
+        s.unsubscribeFooter.trim().takeIf { it.isNotBlank() }?.let { numericClaimText = numericClaimText.replace(it, "") }
+        nonClaimIdentifiers.filter { it.isNotBlank() }.forEach {
+            numericClaimText = numericClaimText.replace(it, "", ignoreCase = true)
+        }
+        val used = numbers(numericClaimText)
         val invented = used.filter { it !in allowed }
         if (invented.isNotEmpty()) {
             blockers.add("عدد/رقمی در متن هست که در گزارش واقعی وجود ندارد: " + invented.take(6).joinToString("، "))
