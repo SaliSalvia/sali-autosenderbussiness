@@ -75,7 +75,19 @@ jobs:
       - name: Unit tests and Android lint
         run: |
           set -o pipefail
-          ./gradlew --no-daemon clean test lintDebug --stacktrace 2>&1 | tee checks.log
+          ./gradlew --no-daemon clean testDebugUnitTest lintDebug jacocoTestReport --stacktrace 2>&1 | tee checks.log
+
+      - name: Upload unit-test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-coverage
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/reports/jacoco/jacocoTestReport/
+            app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Build debug APK (installable, no secrets required)
         run: |
@@ -154,7 +166,7 @@ jobs:
             `SaliBussiness.apk` is the signed release ONLY when the four
             `SALI_KEYSTORE_*` secrets are configured; otherwise it is an identical
             copy of `SaliBussiness-debug.apk` and is NOT production-signed.
-            Only the two 2-page trial PDFs are ever attached to an email; every PDF
+            Only the matching Persian/English two-page trial PDF pair is attached; every PDF
             in a domain folder is read by the AI. Sending requires explicit human
             approval, is idempotent, and re-checks opt-out before every request.
           files: |

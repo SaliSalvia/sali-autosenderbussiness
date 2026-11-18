@@ -86,3 +86,8 @@
 ## نکته حقوقی
 ارسال فقط به سرنخهایی که رابطه تجاری / رضایت دارند؛ دامنه فرستنده باید SPF/DKIM/DMARC داشته باشد؛
 unsubscribe در پاسخ فورا در فهرست عدم ارسال ثبت میشود. جزئیات: [`PRIVACY.md`](PRIVACY.md).
+
+
+## Engineering hardening
+
+The current phase 1–2 hardening work, including strict bilingual trial-PDF attachment validation, full evidence SHA-256, campaign persistence repository, regression tests, and CI coverage reporting, is tracked in [docs/PHASE_1_2_EXECUTION.md](docs/PHASE_1_2_EXECUTION.md).

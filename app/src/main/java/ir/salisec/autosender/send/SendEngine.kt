@@ -308,8 +308,8 @@ class SendEngine(
                 log(msg, false, "رد شد: مخاطب درخواست حذف داده است")
                 continue
             }
-            if (!msg.qualityOk || msg.evidenceHash.isBlank()) {
-                settle(msg, MessageState.SKIPPED, "گیت صحت / شواهد متن تأیید نشده است")
+            if (!msg.qualityOk || !msg.evidenceHash.matches(Regex("(?i)^[0-9a-f]{64}$"))) {
+                settle(msg, MessageState.SKIPPED, "گیت صحت / هش کامل شواهد تأیید نشده است؛ پیام را دوباره بررسی و تأیید کنید")
                 skipped++
                 _state.value = _state.value.copy(skipped = skipped)
                 log(msg, false, "رد شد: متن تأییدنشده یا بدون شواهد")

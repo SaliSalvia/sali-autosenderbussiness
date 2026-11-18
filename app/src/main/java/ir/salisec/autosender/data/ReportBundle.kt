@@ -27,7 +27,7 @@ data class ReportBundle(
     val warnings: List<String> = emptyList()
 ) {
     /** The up-to-2 newest readable PDFs in the folder (e.g. trial_fa + trial). */
-    val trialAttachments: List<PdfDoc> get() = AttachmentPolicy.selectNewestPair(pdfs)
+    val trialAttachments: List<PdfDoc> get() = AttachmentPolicy.selectTrialPair(pdfs)
 
     val allText: String get() = buildString {
         pdfs.forEach { append(it.text).append('\n') }
@@ -73,12 +73,42 @@ data class ReportBundle(
         return sb.toString()
     }
 
-    /** Short audit hash stored with each approved message. */
-    fun fingerprint(): String = try {
-        val bytes = MessageDigest.getInstance("SHA-256").digest(allText.toByteArray(Charsets.UTF_8))
-        bytes.take(8).joinToString("") { "%02x".format(byteArrayOf(it)[0]) }
-    } catch (e: Exception) {
-        "none"
+    /**
+     * Full evidence-pack fingerprint. Includes structured facts and stable PDF
+     * metadata as well as extracted text, so a changed sidecar or report score
+     * cannot silently reuse an earlier approval fingerprint.
+     */
+    fun fingerprint(): String {
+        val canonical = buildString {
+            append("domain=").append(domain.lowercase()).append('\n')
+            data?.let { d ->
+                append("scanId=").append(d.scanId.orEmpty()).append('\n')
+                append("score=").append(d.score).append('\n')
+                append("findings=").append(d.findings).append('\n')
+                append("critical=").append(d.critical).append('\n')
+                append("high=").append(d.high).append('\n')
+                append("medium=").append(d.medium).append('\n')
+                append("low=").append(d.low).append('\n')
+                append("subdomains=").append(d.subdomains).append('\n')
+                append("freeFindingTitle=").append(d.freeFindingTitle.orEmpty()).append('\n')
+                append("freeFindingCvss=").append(d.freeFindingCvss.orEmpty()).append('\n')
+                append("freeFindingImpact=").append(d.freeFindingImpact.orEmpty()).append('\n')
+                append("freeFindingSolution=").append(d.freeFindingSolution.orEmpty()).append('\n')
+            }
+            pdfs.sortedWith(compareBy<PdfDoc> { it.name.lowercase() }.thenBy { it.uri }).forEach { pdf ->
+                append("pdf=").append(pdf.name).append('|')
+                    .append(pdf.uri).append('|')
+                    .append(pdf.pages).append('|')
+                    .append(pdf.sizeBytes).append('|')
+                    .append(pdf.lastModified).append('|')
+                    .append(pdf.readOk).append('\n')
+                append(pdf.text).append('\n')
+            }
+            append("sidecar=").append(sidecarText.orEmpty())
+        }
+        return MessageDigest.getInstance("SHA-256")
+            .digest(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte) }
     }
 }
 
@@ -161,14 +191,47 @@ object AttachmentPolicy {
             .thenBy { it.name.lowercase() }
     )
 
-    /** Picks the 2 newest readable PDFs from the folder. */
-    fun selectNewestPair(pdfs: List<PdfDoc>): List<PdfDoc> {
-        val readable = pdfs.filter { it.readOk && (it.pages == null || it.pages > 0) }
-        return sortNewestFirst(readable).take(2)
+    /** Validates the exact two filenames independently of filesystem ordering. */
+    fun isValidTrialPair(names: List<String>): Boolean {
+        if (names.size != 2 || names.any { !it.trim().lowercase().endsWith(".pdf") }) return false
+        val eligible = names.all { isTrialName(it) && !isFullName(it) }
+        return eligible &&
+            names.count { isPersianName(it) && !isEnglishName(it) } == 1 &&
+            names.count { isEnglishName(it) && !isPersianName(it) } == 1 &&
+            pairKey(names[0]) == pairKey(names[1])
     }
 
-    /** Backward-compatible alias used by tests/callers. */
-    fun selectTrialPair(pdfs: List<PdfDoc>): List<PdfDoc> = selectNewestPair(pdfs)
+    /**
+     * Selects only a matching two-page Persian/English trial pair.
+     * Full reports, unknown page counts and arbitrary recent PDFs fail closed.
+     */
+    fun selectTrialPair(pdfs: List<PdfDoc>): List<PdfDoc> {
+        val eligible = pdfs.filter {
+            it.readOk && it.pages == 2 && isTrialName(it.name) &&
+                !isFullName(it.name) && it.name.trim().lowercase().endsWith(".pdf")
+        }
+        val pairs = eligible.filter { isPersianName(it.name) && !isEnglishName(it.name) }.flatMap { fa ->
+            eligible.filter { en ->
+                en.uri != fa.uri && isEnglishName(en.name) && !isPersianName(en.name) &&
+                    pairKey(en.name) == pairKey(fa.name)
+            }.map { en -> fa to en }
+        }
+        val selected = pairs.maxByOrNull {
+            minOf(effectiveRecency(it.first), effectiveRecency(it.second))
+        } ?: return emptyList()
+        return listOf(selected.first, selected.second)
+    }
+
+    /** Compatibility alias; never falls back to arbitrary recent PDFs. */
+    fun selectNewestPair(pdfs: List<PdfDoc>): List<PdfDoc> = selectTrialPair(pdfs)
+
+    private val languageTokens = faMarkers + enMarkers
+
+    private fun pairKey(name: String): String =
+        normalize(name.substringBeforeLast('.', name))
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .filter { it.isNotBlank() && languageTokens.none { marker -> it == marker.trim('_', '-', '.') } }
+            .joinToString("_")
 
     /** Human-readable file name from a SAF content:// URI. */
     fun displayName(uriString: String): String {

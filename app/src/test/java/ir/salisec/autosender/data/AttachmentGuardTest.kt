@@ -33,11 +33,11 @@ class AttachmentGuardTest {
     }
 
     @Test
-    fun acceptsSingleValidPdf() {
+    fun rejectsSinglePdfEvenWhenItsBytesAreValid() {
         val payloads = listOf(pdf())
-        assertNull(
+        assertNotNull(
             AttachmentGuard.validateFiles(
-                listOf("single_report.pdf"),
+                listOf("2026-11-14_13-06_trial_fa.pdf"),
                 listOf(4),
                 payloads.map { sha256(it) },
                 listOf(4),
@@ -53,6 +53,16 @@ class AttachmentGuardTest {
         assertNotNull(
             AttachmentGuard.validateFiles(
                 names, listOf(2, 2), payloads.map { sha256(it) }, listOf(2, 2), payloads, 4
+            )
+        )
+    }
+
+    @Test
+    fun rejectsNonTwoPagePdfEvenWhenApprovalAndActualCountsMatch() {
+        val payloads = listOf(pdf(), pdf(size = 80))
+        assertNotNull(
+            AttachmentGuard.validateFiles(
+                names, listOf(2, 3), payloads.map { sha256(it) }, listOf(2, 3), payloads, 4
             )
         )
     }
