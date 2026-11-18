@@ -70,18 +70,20 @@ object SendPreflightGuard {
         if (latest == null) return false
         return latest.messageUuid == approved.messageUuid &&
             latest.email.equals(approved.email, ignoreCase = true) &&
+            latest.name == approved.name &&
             latest.domain.equals(approved.domain, ignoreCase = true) &&
             latest.subject == approved.subject &&
             latest.preheader == approved.preheader &&
             latest.body == approved.body &&
             latest.evidenceHash == approved.evidenceHash &&
-            latest.qualityOk == approved.qualityOk &&
+            latest.qualityOk && approved.qualityOk &&
             latest.pdfPaths == approved.pdfPaths &&
             latest.attachmentNames == approved.attachmentNames &&
             latest.attachmentPages == approved.attachmentPages &&
             latest.attachmentSha256 == approved.attachmentSha256 &&
             latest.isFollowUp == approved.isFollowUp &&
             latest.followUpStep == approved.followUpStep &&
+            latest.lastReplySnippet == approved.lastReplySnippet &&
             latest.threadReferences == approved.threadReferences
     }
 
