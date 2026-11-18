@@ -459,10 +459,17 @@ class SendEngine(
             val latest = db.messageDao().byId(msg.id) ?: continue
             val stillApproved =
                 latest.messageUuid == uuid &&
+                    latest.email.equals(msg.email, ignoreCase = true) &&
+                    latest.domain.equals(msg.domain, ignoreCase = true) &&
                     latest.subject == msg.subject &&
+                    latest.preheader == msg.preheader &&
                     latest.body == msg.body &&
                     latest.evidenceHash == msg.evidenceHash &&
-                    latest.qualityOk
+                    latest.qualityOk &&
+                    latest.pdfPaths == msg.pdfPaths &&
+                    latest.attachmentNames == msg.attachmentNames &&
+                    latest.attachmentPages == msg.attachmentPages &&
+                    latest.attachmentSha256 == msg.attachmentSha256
             val suppressedNow = prefs.isSuppressed(msg.email, msg.domain)
             if (suppressedNow) {
                 settle(msg, MessageState.SKIPPED, "در فهرست عدم ارسال (opt-out)")
@@ -489,11 +496,18 @@ class SendEngine(
             }
 
             val sendSettings = prefs.load()
+            if (!sendSettings.hasOutgoingConfigured()) {
+                settle(msg, MessageState.SKIPPED, "تنظیمات فرستنده هنگام آماده‌سازی ارسال تغییر کرده یا ناقص شده است")
+                skipped++
+                _state.value = _state.value.copy(skipped = skipped)
+                log(msg, false, "ارسال متوقف شد: تنظیمات فرستنده دیگر کامل نیست")
+                continue
+            }
             val attempts = msg.attempts + 1
             try {
                 val sender = if (sendSettings.sendMode == "BREVO_API") brevo else smtp
                 val receipt = sender.send(sendSettings, out)
-                val nextFollowUpAt = computeNextFollowUpAt(msg, settings, System.currentTimeMillis())
+                val nextFollowUpAt = computeNextFollowUpAt(msg, sendSettings, System.currentTimeMillis())
                 val nextRefs = listOfNotNull(fullReferences, receipt.providerMessageId)
                     .joinToString(" ")
                     .trim()
@@ -513,7 +527,7 @@ class SendEngine(
                 _state.value = _state.value.copy(sent = sent, sentToday = sentToday)
                 log(msg, true, "ارسال شد | پیوست: " + names.joinToString(" + "))
             } catch (e: DuplicateSendException) {
-                val nextFollowUpAt = computeNextFollowUpAt(msg, settings, System.currentTimeMillis())
+                val nextFollowUpAt = computeNextFollowUpAt(msg, sendSettings, System.currentTimeMillis())
                 settle(msg, MessageState.SENT, null, sent = true, attempts = attempts, followUpAt = nextFollowUpAt)
                 sent++
                 sentToday++
