@@ -74,7 +74,7 @@ class GoldenSetTest {
             val allowed = QualityGate.allowedNumbers(evidence(c))
             repeat(5) { variant ->
                 val draft = copy(c, variant)
-                val report = QualityGate.validate(draft, settings, allowed)
+                val report = QualityGate.validate(draft, settings, allowed, scoreValue = c.score.toString())
                 assertTrue("${c.domain} variant $variant: ${report.blockers}", report.passed)
                 assertTrue(report.blockers.isEmpty())
                 assertTrue(draft.subject.length <= 50)
@@ -99,7 +99,7 @@ class GoldenSetTest {
         val c = cases.first()
         val allowed = QualityGate.allowedNumbers(evidence(c))
         val tampered = copy(c).copy(body = copy(c).body + " نرخ تبدیل ما ۸۷ درصد است.")
-        val report = QualityGate.validate(tampered, settings, allowed)
+        val report = QualityGate.validate(tampered, settings, allowed, scoreValue = c.score.toString())
         assertFalse(report.passed)
         assertTrue(report.blockers.isNotEmpty())
     }
