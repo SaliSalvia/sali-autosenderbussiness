@@ -23,11 +23,11 @@ object CampaignSnapshot {
         val root = JSONObject()
         root.put("v", VERSION)
         val d = JSONArray()
-        domains.distinct().forEach { d.put(it) }
+        domains.forEach { d.put(it) }
         root.put("domains", d)
 
         val c = JSONArray()
-        contacts.distinctBy { it.email.lowercase() }.sortedBy { it.email.lowercase() }.forEach { x ->
+        contacts.forEach { x ->
             c.put(
                 JSONObject()
                     .put("domain", x.domain)
@@ -39,13 +39,13 @@ object CampaignSnapshot {
         root.put("contacts", c)
 
         val s = JSONArray()
-        selected.toSortedSet().forEach { s.put(it) }
+        selected.forEach { s.put(it) }
         root.put("selected", s)
 
         val ctx = JSONArray()
-        contexts.distinctBy { it.domain.lowercase() }.sortedBy { it.domain.lowercase() }.forEach { x ->
+        contexts.forEach { x ->
             val sources = JSONArray()
-            x.sources.distinct().sorted().forEach { sources.put(it) }
+            x.sources.forEach { sources.put(it) }
             ctx.put(
                 JSONObject()
                     .put("domain", x.domain)
@@ -72,12 +72,11 @@ object CampaignSnapshot {
             o.optJSONArray("contacts")?.let { a ->
                 for (i in 0 until a.length()) {
                     val c = a.optJSONObject(i) ?: continue
-                    val email = c.optString("email", "").lowercase()
-                    val domain = c.optString("domain", "").lowercase()
-                    if (email.isBlank() || !ContactsParser.validateEmail(email) || !DomainValidator.isValid(domain)) continue
+                    val email = c.optString("email", "")
+                    if (email.isBlank() || !ContactsParser.validateEmail(email)) continue
                     contacts.add(
                         Contact(
-                            domain = domain,
+                            domain = c.optString("domain", "").lowercase(),
                             email = email.lowercase(),
                             name = c.optString("name", "").takeIf { it.isNotBlank() },
                             isRole = c.optBoolean("isRole", false)
@@ -100,8 +99,8 @@ object CampaignSnapshot {
                         for (j in 0 until sa.length()) sa.optString(j, "").takeIf { it.isNotBlank() }?.let { sources.add(it) }
                     }
                     val domain = c.optString("domain", "")
-                    if (DomainValidator.isValid(domain)) {
-                        contexts.add(CompanyContext(domain.lowercase(), c.optString("summary", ""), sources.distinct()))
+                    if (domain.isNotBlank()) {
+                        contexts.add(CompanyContext(domain, c.optString("summary", ""), sources))
                     }
                 }
             }
@@ -109,7 +108,7 @@ object CampaignSnapshot {
             CampaignSnapshotData(
                 domains = domains.filter { DomainValidator.isValid(it) },
                 contacts = contacts,
-                selected = selected.intersect(contacts.map { it.email }.toSet()),
+                selected = selected,
                 contexts = contexts
             )
         } catch (e: Exception) {

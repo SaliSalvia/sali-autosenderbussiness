@@ -33,11 +33,11 @@ class AttachmentGuardTest {
     }
 
     @Test
-    fun rejectsSinglePdfEvenWhenItsBytesAreValid() {
+    fun acceptsSingleValidPdf() {
         val payloads = listOf(pdf())
-        assertNotNull(
+        assertNull(
             AttachmentGuard.validateFiles(
-                listOf("2026-11-14_13-06_trial_fa.pdf"),
+                listOf("single_report.pdf"),
                 listOf(4),
                 payloads.map { sha256(it) },
                 listOf(4),
@@ -53,16 +53,6 @@ class AttachmentGuardTest {
         assertNotNull(
             AttachmentGuard.validateFiles(
                 names, listOf(2, 2), payloads.map { sha256(it) }, listOf(2, 2), payloads, 4
-            )
-        )
-    }
-
-    @Test
-    fun rejectsNonTwoPagePdfEvenWhenApprovalAndActualCountsMatch() {
-        val payloads = listOf(pdf(), pdf(size = 80))
-        assertNotNull(
-            AttachmentGuard.validateFiles(
-                names, listOf(2, 3), payloads.map { sha256(it) }, listOf(2, 3), payloads, 4
             )
         )
     }
@@ -125,23 +115,6 @@ class AttachmentGuardTest {
         assertTrue(AttachmentGuard.isPdf("%PDF-1.7".toByteArray()))
         assertFalse(AttachmentGuard.isPdf("PK\u0003\u0004".toByteArray()))
         assertFalse(AttachmentGuard.isPdf(ByteArray(2)))
-    }
-
-    @Test
-    fun allowsFileExactlyAtConfiguredFourMegabyteLimit() {
-        val exactLimit = ByteArray(AttachmentGuard.MAX_PER_FILE_BYTES.toInt())
-        "%PDF-1.4".toByteArray().copyInto(exactLimit)
-        val payloads = listOf(exactLimit, pdf())
-        assertNull(
-            AttachmentGuard.validateFiles(
-                names,
-                listOf(2, 2),
-                payloads.map { sha256(it) },
-                listOf(2, 2),
-                payloads,
-                4
-            )
-        )
     }
 
     @Test

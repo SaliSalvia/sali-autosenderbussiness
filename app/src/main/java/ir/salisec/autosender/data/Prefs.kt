@@ -91,13 +91,33 @@ data class Settings(
 }
 
 class Prefs(context: Context) {
-    private val sp: SharedPreferences = EncryptedSharedPreferences.create(
-        context,
-        "sali_secure_prefs",
-        MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+    private val sp: SharedPreferences = createSecurePrefs(context.applicationContext)
+
+    private fun createSecurePrefs(context: Context): SharedPreferences {
+        fun buildEncrypted(): SharedPreferences = EncryptedSharedPreferences.create(
+            context,
+            "sali_secure_prefs",
+            MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+        return try {
+            buildEncrypted()
+        } catch (_: Exception) {
+            // Recover cleanly if Tink keyset / KeyStore entry was invalidated after backup/restore
+            try {
+                context.deleteSharedPreferences("sali_secure_prefs")
+                val ks = java.security.KeyStore.getInstance("AndroidKeyStore")
+                ks.load(null)
+                ks.deleteEntry(MasterKey.DEFAULT_MASTER_KEY_ALIAS)
+            } catch (_: Exception) { }
+            try {
+                buildEncrypted()
+            } catch (_: Exception) {
+                context.getSharedPreferences("sali_secure_prefs_fallback", Context.MODE_PRIVATE)
+            }
+        }
+    }
 
     fun load(): Settings = Settings(
         accountSetupDone = sp.getBoolean("accountSetupDone", false),
@@ -208,10 +228,13 @@ class Prefs(context: Context) {
         sp.edit().clear().apply()
     }
 
-    private fun normalizeHcnsEndpoint(v: String?): String {
-        val value = v?.trim().orEmpty()
+    internal fun normalizeHcnsEndpoint(v: String?): String {
+        var value = v?.trim().orEmpty()
+        if (value.isBlank()) return HCNS_CHAT_ENDPOINT
+        if (!value.startsWith("http://", ignoreCase = true) && !value.startsWith("https://", ignoreCase = true)) {
+            value = "https://$value"
+        }
         return when {
-            value.isBlank() -> HCNS_CHAT_ENDPOINT
             value.endsWith("/chat/completions") -> value
             value.endsWith("/v1") -> "$value/chat/completions"
             value.endsWith("/v1/") -> "${value}chat/completions"
@@ -220,10 +243,13 @@ class Prefs(context: Context) {
         }
     }
 
-    private fun migrateYouEndpoint(v: String?): String {
-        val value = v?.trim().orEmpty()
+    internal fun migrateYouEndpoint(v: String?): String {
+        var value = v?.trim().orEmpty()
+        if (value.isBlank()) return YOU_SEARCH_ENDPOINT
+        if (!value.startsWith("http://", ignoreCase = true) && !value.startsWith("https://", ignoreCase = true)) {
+            value = "https://$value"
+        }
         return when {
-            value.isBlank() -> YOU_SEARCH_ENDPOINT
             value.contains("api.youdotcom.ai") -> YOU_SEARCH_ENDPOINT
             value.contains("api.ydc-index.io") -> YOU_SEARCH_ENDPOINT
             else -> value

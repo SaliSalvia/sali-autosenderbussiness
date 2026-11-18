@@ -61,8 +61,11 @@ import ir.salisec.autosender.data.PrivacyRedactor
 import ir.salisec.autosender.mail.CheckSeverity
 import ir.salisec.autosender.mail.DeliverabilityReport
 import ir.salisec.autosender.send.MessageState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -78,6 +81,7 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
     var nowTick by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var checkingDns by remember { mutableStateOf(false) }
     var copiedRecordNotice by remember { mutableStateOf<String?>(null) }
+    var exportNotice by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
     val settings = remember(state.running) { app.prefs.load() }
     val senderConfigured = settings.hasOutgoingConfigured()
@@ -114,7 +118,14 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
     LaunchedEffect(Unit) {
         app.engine.refreshLogs()
         reload()
-        runDeliverabilityChecks()
+        val cached = app.session.deliverability.value
+        val currentDomain = app.prefs.load().fromEmail.trim().substringAfter('@', "").lowercase()
+        val fresh = cached != null &&
+            cached.senderDomain.equals(currentDomain, ignoreCase = true) &&
+            (System.currentTimeMillis() - cached.checkedAt) < 5 * 60_000L
+        if (!fresh) {
+            runDeliverabilityChecks()
+        }
     }
     LaunchedEffect(state.sent, state.failed, state.skipped, state.running) { reload() }
 
@@ -131,13 +142,22 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
     ) { uri ->
         if (uri != null) {
             scope.launch {
-                val logs = app.db.logDao().recent().reversed()
-                val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-                val text = logs.joinToString("\n") { l ->
-                    fmt.format(Date(l.ts)) + " | " + (if (l.ok) "OK" else "FAIL") +
-                        " | " + l.domain + " | " + PrivacyRedactor.redact(l.message)
+                try {
+                    val text = withContext(Dispatchers.IO) {
+                        val logs = app.db.logDao().recent().reversed()
+                        val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+                        val body = logs.joinToString("\n") { l ->
+                            fmt.format(Date(l.ts)) + " | " + (if (l.ok) "OK" else "FAIL") +
+                                " | " + l.domain + " | " + PrivacyRedactor.redact(l.message)
+                        }
+                        context.contentResolver.openOutputStream(uri)?.use { it.write(body.toByteArray()) }
+                            ?: throw IllegalStateException("باز کردن مسیر خروجی ناموفق بود")
+                        logs.size
+                    }
+                    exportNotice = true to "گزارش ($text رکورد) با موفقیت ذخیره شد ✓"
+                } catch (e: Exception) {
+                    exportNotice = false to "خطا در ذخیره فایل گزارش: ${e.message?.take(120)}"
                 }
-                context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
             }
         }
     }
@@ -308,6 +328,28 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
                                             }
                                         }) { Text("حذف", color = RedErr) }
                                     }
+                                } else if (m.status == MessageState.APPROVED || m.status == MessageState.QUEUED) {
+                                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                                        TextButton(onClick = {
+                                            scope.launch {
+                                                app.db.messageDao().delete(m)
+                                                val uuid = m.messageUuid
+                                                if (!uuid.isNullOrBlank()) {
+                                                    app.session.drafts.update { list ->
+                                                        list.map { d -> if (d.messageUuid == uuid) d.copy(approved = false) else d }
+                                                    }
+                                                    val saved = app.session.persistedDrafts.value.values.firstOrNull { it.messageUuid == uuid }
+                                                    if (saved != null) {
+                                                        val demoted = saved.copy(approved = false, updatedAt = System.currentTimeMillis())
+                                                        app.session.persistedDrafts.update { it + (demoted.key to demoted) }
+                                                        withContext(Dispatchers.IO) { app.db.studioDraftDao().upsert(demoted) }
+                                                    }
+                                                }
+                                                app.engine.notifyQueueChanged()
+                                                reload()
+                                            }
+                                        }) { Text("حذف از صف", color = RedErr) }
+                                    }
                                 }
                             }
                         }
@@ -323,13 +365,16 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
                         val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(l.ts))
                         Text(
                             "$time  ${if (l.ok) "✓" else "!"}  ${l.domain}  ${l.email}  —  ${l.message}",
-                            fontSize = 12.sp,
+                            fontSize = 11.5.sp,
+                            fontFamily = MonoFontFamily,
                             color = if (l.ok) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
                         )
                     }
                 }
             }
         }
+
+        exportNotice?.let { (ok, msg) -> Chip(msg, if (ok) GreenOk else RedErr) }
 
         OutlinedButton(
             onClick = { exportLauncher.launch("sali-send-log-${System.currentTimeMillis()}.txt") },
@@ -466,6 +511,7 @@ private fun DeliverabilityChecklistCard(
                                         Text(
                                             item.suggestedRecord,
                                             fontSize = 11.sp,
+                                            fontFamily = MonoFontFamily,
                                             modifier = Modifier.weight(1f)
                                         )
                                         TextButton(onClick = { onCopyRecord(item.suggestedRecord) }) {

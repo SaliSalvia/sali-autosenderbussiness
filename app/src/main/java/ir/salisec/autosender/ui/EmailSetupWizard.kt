@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Email
@@ -37,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import ir.salisec.autosender.App
 import ir.salisec.autosender.data.ContactsParser
@@ -171,6 +173,7 @@ fun EmailSetupWizard(
                 value = email,
                 singleLine = true,
                 placeholder = "security@yourdomain.ir",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                 modifier = Modifier.testTag("wizard_email_input")
             ) {
                 email = it
@@ -264,8 +267,10 @@ fun EmailSetupWizard(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("سرور ورودی (IMAP - برای دریافت پاسخ مشتریان و Bounce)", style = MaterialTheme.typography.labelLarge)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        LabeledField("IMAP Host", imapHost, singleLine = true, modifier = Modifier.weight(2f)) { imapHost = it }
-                        LabeledField("Port", imapPort, singleLine = true, modifier = Modifier.weight(1f)) { imapPort = it }
+                        LabeledField("IMAP Host", imapHost, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.weight(2f)) { imapHost = it }
+                        LabeledField("Port", imapPort, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f)) { raw ->
+                            imapPort = raw.filter { it.isDigit() }.take(5)
+                        }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf("SSL" to "SSL/TLS (993)", "STARTTLS" to "STARTTLS (143)").forEach { (sec, lbl) ->
@@ -286,8 +291,10 @@ fun EmailSetupWizard(
                     if (sendMode == "SMTP") {
                         Text("سرور خروجی (SMTP)", style = MaterialTheme.typography.labelLarge)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            LabeledField("SMTP Host", smtpHost, singleLine = true, modifier = Modifier.weight(2f)) { smtpHost = it }
-                            LabeledField("Port", smtpPort, singleLine = true, modifier = Modifier.weight(1f)) { smtpPort = it }
+                            LabeledField("SMTP Host", smtpHost, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.weight(2f)) { smtpHost = it }
+                            LabeledField("Port", smtpPort, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f)) { raw ->
+                                smtpPort = raw.filter { it.isDigit() }.take(5)
+                            }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf("STARTTLS" to "STARTTLS (587)", "SSL" to "SSL/TLS (465)").forEach { (sec, lbl) ->

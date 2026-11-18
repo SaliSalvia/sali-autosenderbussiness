@@ -20,6 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -166,9 +167,10 @@ fun LabeledField(
     label: String,
     value: String,
     multiline: Boolean = false,
-    singleLine: Boolean = false,
+    singleLine: Boolean = !multiline,
     placeholder: String = "",
     isSecret: Boolean = false,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     modifier: Modifier = Modifier,
     onChange: (String) -> Unit
 ) {
@@ -188,6 +190,7 @@ fun LabeledField(
             minLines = if (multiline) 3 else 1,
             maxLines = if (multiline) 10 else 1,
             singleLine = singleLine && !multiline,
+            keyboardOptions = keyboardOptions,
             visualTransformation = if (isSecret) PasswordVisualTransformation() else VisualTransformation.None,
             shape = RoundedCornerShape(14.dp),
             colors = OutlinedTextFieldDefaults.colors(
@@ -240,13 +243,7 @@ fun Chip(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null
 ) {
-    val clickMod = if (onClick != null) modifier.clickable(onClick = onClick) else modifier
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = color.copy(alpha = 0.14f),
-        border = BorderStroke(1.dp, color.copy(alpha = 0.30f)),
-        modifier = clickMod
-    ) {
+    val content: @Composable () -> Unit = {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -265,6 +262,24 @@ fun Chip(
                 fontSize = 11.5.sp
             )
         }
+    }
+    if (onClick != null) {
+        Surface(
+            onClick = onClick,
+            shape = RoundedCornerShape(50),
+            color = color.copy(alpha = 0.14f),
+            border = BorderStroke(1.dp, color.copy(alpha = 0.30f)),
+            modifier = modifier,
+            content = content
+        )
+    } else {
+        Surface(
+            shape = RoundedCornerShape(50),
+            color = color.copy(alpha = 0.14f),
+            border = BorderStroke(1.dp, color.copy(alpha = 0.30f)),
+            modifier = modifier,
+            content = content
+        )
     }
 }
 

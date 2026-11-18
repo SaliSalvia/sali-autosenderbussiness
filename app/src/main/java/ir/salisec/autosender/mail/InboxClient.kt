@@ -38,13 +38,18 @@ class InboxClient {
 
     private fun protocol(s: Settings): String = if (s.imapSecurity == "STARTTLS") "imap" else "imaps"
 
+    private fun safePort(s: Settings): Int =
+        if (s.imapPort in 1..65535) s.imapPort else if (s.imapSecurity == "STARTTLS") 143 else 993
+
     private fun session(s: Settings): Session {
         val useStartTls = s.imapSecurity == "STARTTLS"
+        val host = s.imapHost.trim()
+        val port = safePort(s)
         return Session.getInstance(Properties().apply {
             if (useStartTls) {
                 put("mail.store.protocol", "imap")
-                put("mail.imap.host", s.imapHost)
-                put("mail.imap.port", s.imapPort.toString())
+                put("mail.imap.host", host)
+                put("mail.imap.port", port.toString())
                 put("mail.imap.starttls.enable", "true")
                 put("mail.imap.starttls.required", "true")
                 put("mail.imap.ssl.checkserveridentity", "true")
@@ -52,8 +57,8 @@ class InboxClient {
                 put("mail.imap.timeout", "30000")
             } else {
                 put("mail.store.protocol", "imaps")
-                put("mail.imaps.host", s.imapHost)
-                put("mail.imaps.port", s.imapPort.toString())
+                put("mail.imaps.host", host)
+                put("mail.imaps.port", port.toString())
                 put("mail.imaps.connectiontimeout", "20000")
                 put("mail.imaps.timeout", "30000")
                 put("mail.imaps.ssl.checkserveridentity", "true")
@@ -63,7 +68,7 @@ class InboxClient {
 
     suspend fun list(s: Settings, limit: Int = 50): List<InboxMessage> = withContext(Dispatchers.IO) {
         val store = session(s).getStore(protocol(s))
-        store.connect(s.imapHost, s.imapPort, s.imapUser, s.imapPass)
+        store.connect(s.imapHost.trim(), safePort(s), s.imapUser.trim(), s.imapPass)
         try {
             val folder = store.getFolder("INBOX")
             folder.open(Folder.READ_ONLY)
@@ -87,7 +92,10 @@ class InboxClient {
                         uidFolder?.getUID(m) ?: -1L
                     } catch (_: Exception) { -1L }
                     val body = bodyText(m)
-                    val fromStr = m.from?.firstOrNull()?.toString() ?: ""
+                    val rawFrom = m.from?.firstOrNull()?.toString() ?: ""
+                    val fromStr = try {
+                        javax.mail.internet.MimeUtility.decodeText(rawFrom)
+                    } catch (_: Exception) { rawFrom }
                     val subj = m.subject ?: ""
                     val msgId = m.getHeader("Message-ID")?.firstOrNull()?.trim()
                     val refs = m.getHeader("References")?.joinToString(" ")?.trim()
@@ -98,7 +106,7 @@ class InboxClient {
                             position = total - msgNum,
                             from = fromStr,
                             subject = subj,
-                            date = m.sentDate?.time ?: 0L,
+                            date = m.sentDate?.time ?: m.receivedDate?.time ?: 0L,
                             preview = body.replace("\\s+".toRegex(), " ").take(140),
                             messageId = msgId,
                             references = refs,
@@ -120,7 +128,7 @@ class InboxClient {
 
     suspend fun readFull(s: Settings, position: Int, uid: Long = -1L): InboxFullMessage = withContext(Dispatchers.IO) {
         val store = session(s).getStore(protocol(s))
-        store.connect(s.imapHost, s.imapPort, s.imapUser, s.imapPass)
+        store.connect(s.imapHost.trim(), safePort(s), s.imapUser.trim(), s.imapPass)
         try {
             val folder = store.getFolder("INBOX")
             folder.open(Folder.READ_ONLY)
@@ -162,22 +170,56 @@ class InboxClient {
 
     private fun bodyText(m: MimeMessage): String {
         return try {
-            val sb = StringBuilder()
-            walkParts(m, sb)
-            if (sb.isBlank()) m.content?.toString() ?: "" else sb.toString()
+            val plain = StringBuilder()
+            val html = StringBuilder()
+            walkParts(m, plain, html)
+            when {
+                plain.isNotBlank() -> plain.toString().trim()
+                html.isNotBlank() -> stripHtml(html.toString())
+                else -> m.content?.toString()?.trim().orEmpty()
+            }
         } catch (e: Exception) { "(بدون متن قابل نمایش)" }
     }
 
-    private fun walkParts(part: javax.mail.Part, sb: StringBuilder) {
+    private fun walkParts(part: javax.mail.Part, plain: StringBuilder, html: StringBuilder) {
         try {
-            if (part.isMimeType("text/plain")) {
-                sb.append(part.content?.toString() ?: "")
-            } else if (part.isMimeType("multipart/*")) {
-                val mp = part.content as javax.mail.Multipart
-                for (i in 0 until mp.count) walkParts(mp.getBodyPart(i), sb)
-            } else if (part.isMimeType("text/html")) {
-                sb.append((part.content?.toString() ?: "").replace(Regex("<[^>]*>"), " "))
+            when {
+                part.isMimeType("text/plain") -> {
+                    val txt = part.content?.toString().orEmpty()
+                    if (txt.isNotBlank()) plain.append(txt).append('\n')
+                }
+                part.isMimeType("text/html") -> {
+                    val txt = part.content?.toString().orEmpty()
+                    if (txt.isNotBlank()) html.append(txt).append('\n')
+                }
+                part.isMimeType("multipart/alternative") -> {
+                    val mp = part.content as javax.mail.Multipart
+                    val altPlain = StringBuilder()
+                    val altHtml = StringBuilder()
+                    for (i in 0 until mp.count) walkParts(mp.getBodyPart(i), altPlain, altHtml)
+                    if (altPlain.isNotBlank()) plain.append(altPlain) else html.append(altHtml)
+                }
+                part.isMimeType("multipart/*") -> {
+                    val mp = part.content as javax.mail.Multipart
+                    for (i in 0 until mp.count) walkParts(mp.getBodyPart(i), plain, html)
+                }
             }
-        } catch (e: Exception) { /* skip part */ }
+        } catch (_: Exception) { /* skip part */ }
     }
+
+    private fun stripHtml(raw: String): String = raw
+        .replace(Regex("(?is)<style[^>]*>.*?</style>"), " ")
+        .replace(Regex("(?is)<script[^>]*>.*?</script>"), " ")
+        .replace(Regex("(?i)<br\\s*/?>|</p>|</div>|</li>"), "\n")
+        .replace(Regex("<[^>]*>"), " ")
+        .replace("&nbsp;", " ")
+        .replace("&zwnj;", "\u200C")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace(Regex("[ \\t]{2,}"), " ")
+        .replace(Regex("\\n{3,}"), "\n\n")
+        .trim()
 }

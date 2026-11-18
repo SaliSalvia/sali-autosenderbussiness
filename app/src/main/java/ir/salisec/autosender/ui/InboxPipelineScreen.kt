@@ -232,6 +232,9 @@ private fun PipelineTab(app: App) {
             try {
                 val inboxMsgs = app.inbox.list(s, limit = 60)
                 val (repliesMatched, optOutsMatched, bouncesMatched) = syncInboxMatchesWithDb(app, inboxMsgs)
+                if (optOutsMatched > 0 || bouncesMatched > 0) {
+                    app.engine.notifyQueueChanged()
+                }
                 reload()
                 okMsg = "همگام‌سازی کامل شد ✓ | $repliesMatched پاسخ جدید، $optOutsMatched خروج، $bouncesMatched برگشتی (Bounce)"
             } catch (e: Exception) {
@@ -658,6 +661,7 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
     var syncedLeadsMap by remember { mutableStateOf<Map<String, MessageEntity>>(emptyMap()) }
 
     var open by remember { mutableStateOf<InboxMessage?>(null) }
+    var openingMessage by remember { mutableStateOf(false) }
     var openText by remember { mutableStateOf("") }
     var openMessageId by remember { mutableStateOf<String?>(null) }
     var openReferences by remember { mutableStateOf<String?>(null) }
@@ -683,7 +687,12 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                 val list = app.inbox.list(latest)
                 messages = list
                 val (rep, opt, bnc) = syncInboxMatchesWithDb(app, list)
-                syncedLeadsMap = app.db.messageDao().all().associateBy { it.email.lowercase() }
+                if (opt > 0 || bnc > 0) {
+                    app.engine.notifyQueueChanged()
+                }
+                syncedLeadsMap = app.db.messageDao().all()
+                    .sortedBy { it.sentAt ?: it.createdAt }
+                    .associateBy { it.email.lowercase() }
                 if (rep > 0 || opt > 0 || bnc > 0) {
                     notice = "تطبیق خودکار با سرنخ‌ها: $rep پاسخ، $opt خروج، $bnc برگشتی ✓"
                 }
@@ -709,10 +718,11 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
             }
         }
     } else if (open == null) {
-        OutlinedButton(onClick = { load() }, modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(onClick = { load() }, enabled = !loading && !openingMessage, modifier = Modifier.fillMaxWidth()) {
             Text("دریافت / بروزرسانی صندوق و همگام‌سازی سرنخ‌ها")
         }
         if (loading) LoadingBox("در حال دریافت ایمیل‌ها...")
+        if (openingMessage) LoadingBox("در حال بارگذاری متن کامل پیام...")
         SubTitle(if (messages.isEmpty()) "پیامی وجود ندارد" else "${messages.size} پیام دریافت شد")
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             messages.forEach { m ->
@@ -727,8 +737,9 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                         else if (lead != null) GreenOk.copy(alpha = 0.45f)
                         else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                     ),
-                    modifier = Modifier.fillMaxWidth().clickable {
+                    modifier = Modifier.fillMaxWidth().clickable(enabled = !openingMessage) {
                         scope.launch {
+                            openingMessage = true
                             error = null
                             notice = null
                             try {
@@ -744,6 +755,8 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                                 open = m
                             } catch (e: Exception) {
                                 error = "خواندن پیام ناموفق: " + (e.message?.take(120) ?: "")
+                            } finally {
+                                openingMessage = false
                             }
                         }
                     }
@@ -751,7 +764,11 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text(m.from, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                            Text(fmt.format(Date(m.date)), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                if (m.date > 0L) fmt.format(Date(m.date)) else "—",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             if (m.isBounce) {
@@ -792,6 +809,7 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                                         it.copy(pipelineState = "LOST", status = "SKIPPED", followUpAt = null)
                                     )
                                 }
+                            app.engine.notifyQueueChanged()
                         }
                         notice = "${address.substringAfter('@')} به لیست عدم ارسال اضافه شد"
                         open = null
@@ -837,7 +855,17 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                                 previousBody = matchedLead?.body,
                                 customerReplyText = openText,
                                 domain = domain,
-                                email = senderAddr
+                                email = senderAddr,
+                                onResolvedModel = { probe ->
+                                    app.prefs.save(
+                                        currentSettings.copy(
+                                            hcnsModel = probe.selectedModel,
+                                            hcnsReviewModel = probe.reviewModel,
+                                            hcnsAvailableModels = probe.availableModels.joinToString(","),
+                                            hcnsModelVerified = true
+                                        )
+                                    )
+                                }
                             )
                             replyText = res.body
                         } catch (e: Exception) {

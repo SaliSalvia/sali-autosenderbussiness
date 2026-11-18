@@ -113,8 +113,8 @@ fun AppShell(app: App) {
         pendingCount = app.db.messageDao().pendingCount()
     }
 
-    BackHandler(enabled = current != Screen.Home && current != Screen.EmailSetup) {
-        current = if (current == Screen.Settings) previousTab else Screen.Home
+    BackHandler(enabled = current != Screen.Home && !(current == Screen.EmailSetup && firstRunSetup)) {
+        current = if (current == Screen.Settings || current == Screen.EmailSetup) previousTab else Screen.Home
     }
 
     val titleText = when (current) {
@@ -262,7 +262,7 @@ fun AppShell(app: App) {
                     isFirstRun = firstRunSetup,
                     onDone = {
                         firstRunSetup = false
-                        current = Screen.Home
+                        current = if (previousTab == Screen.EmailSetup) Screen.Home else previousTab
                     }
                 )
             }

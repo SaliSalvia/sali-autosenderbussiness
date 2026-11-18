@@ -14,7 +14,7 @@
     <string name="home_subtitle">پلتفرم هوشمند تطبیق گزارش، تحلیل کسب‌وکار و ارسال ایمیل فروش</string>
     <string name="home_workspace">دسترسی سریع</string>
     <string name="home_bulk">کنترل ارسال گروهی</string>
-    <string name="home_bulk_hint">پیام‌های تأییدشده با فاصله ایمن ارسال می‌شوند؛ پیوست‌ها فقط در صورت وجود جفت Trial فارسی و انگلیسیِ معتبر (هرکدام دقیقاً دو صفحه) اضافه می‌شوند.</string>
+    <string name="home_bulk_hint">تمام پیام‌های تأییدشده با فاصله امن و ۲ فایل PDF جدیدترین هر پوشه ارسال می‌شوند.</string>
     <string name="home_send_all">ارسال همه پیام‌های تأییدشده</string>
     <string name="home_queue_empty">صف تأییدشده خالی است</string>
     <string name="home_manage_queue">مدیریت صف و توقف ارسال</string>
@@ -26,7 +26,7 @@
     <string name="home_approved">در صف</string>
     <string name="home_queue">وضعیت</string>
     <string name="home_confirm_title">تأیید ارسال گروهی</string>
-    <string name="home_confirm_body">ارسال به‌صورت زمان‌بندی‌شده انجام می‌شود. پیش از هر ارسال، opt-out، تازگی شواهد و اعتبار جفت Trial فارسی/انگلیسی بررسی می‌شود. شروع می‌کنید؟</string>
+    <string name="home_confirm_body">ارسال به صورت زمان‌بندی‌شده انجام می‌شود و هر پیام پیش از ارسال از نظر opt-out و سلامت ۲ فایل PDF بررسی می‌شود. شروع می‌کنید؟</string>
     <string name="home_confirm_ok">شروع ارسال</string>
     <string name="home_confirm_review">بازبینی صف</string>
     <string name="cd_open">باز کردن</string>
@@ -45,7 +45,7 @@
     <string name="send_bulk_empty">پیام تأییدشده‌ای در صف نیست</string>
     <string name="send_waiting">ارسال بعدی تا</string>
     <string name="send_confirm_title">شروع ارسال گروهی</string>
-    <string name="send_confirm_body">پیام‌های تأییدشده با فاصله تنظیم‌شده ارسال می‌شوند؛ تازگی شواهد و جفت Trial فارسی/انگلیسی پیش از ارسال دوباره بررسی می‌شود. ادامه می‌دهید؟</string>
+    <string name="send_confirm_body">پیام‌های تأییدشده با فاصله تنظیم‌شده و پیوست ۲ فایل PDF جدیدترین هر پوشه ارسال خواهند شد. ادامه می‌دهید؟</string>
     <string name="send_confirm_ok">تأیید و شروع</string>
     <string name="send_confirm_cancel">انصراف</string>
     <string name="send_messages">صف پیام‌ها</string>
@@ -62,8 +62,8 @@
     <string name="status_uncertain">نیازمند بررسی</string>
 
     <!-- Attachment policy -->
-    <string name="policy_title">سیاست پیوست خودکار (جفت Trial دوزبانه)</string>
-    <string name="policy_mandatory">انتخاب جفت هم‌خانواده Trial: یک PDF فارسی و یک PDF انگلیسی، هرکدام دقیقاً دو صفحه</string>
+    <string name="policy_title">سیاست پیوست خودکار (۲ PDF جدیدترین)</string>
+    <string name="policy_mandatory">انتخاب خودکار ۲ فایل PDF جدیدترین از پوشه هر دامنه در sitest</string>
     <string name="policy_cap">سقف حجم هر پیوست (مگابایت)</string>
-    <string name="policy_note">برنامه پوشه دامنه را در sitest پیدا می‌کند و فقط جفت هم‌خانواده Trial شامل یک PDF فارسی و یک PDF انگلیسی را می‌پذیرد؛ هر فایل باید دقیقاً دو صفحه و حداکثر ۴ مگابایت باشد. اگر جفت معتبر موجود نباشد، ارسالِ دارای پیوست متوقف می‌شود.</string>
+    <string name="policy_note">برنامه به صورت خودکار پوشه دامنه را در sitest پیدا کرده و حداکثر ۲ فایل PDF جدیدترین (بر اساس تاریخ فایل و زمان تغییر) را ضمیمه ایمیل می‌کند. پیش از ارسال نیز سلامت PDF و سقف ۴ مگابایت بررسی می‌شود.</string>
 </resources>

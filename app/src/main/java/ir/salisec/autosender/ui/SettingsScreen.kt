@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.DeleteForever
@@ -38,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import ir.salisec.autosender.App
@@ -59,6 +61,55 @@ fun SettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var s by remember { mutableStateOf(app.prefs.load()) }
+    var maxAiCallsStr by remember { mutableStateOf(s.maxAiCallsPerEmail.toString()) }
+    var youCountStr by remember { mutableStateOf(s.youCount.toString()) }
+    var smtpPortStr by remember { mutableStateOf(s.smtpPort.toString()) }
+    var delayStr by remember { mutableStateOf(s.delaySeconds.toString()) }
+    var jitterStr by remember { mutableStateOf(s.jitterSeconds.toString()) }
+    var dailyCapStr by remember { mutableStateOf(s.dailyCap.toString()) }
+    var bizStartStr by remember { mutableStateOf(s.businessStartHour.toString()) }
+    var bizEndStr by remember { mutableStateOf(s.businessEndHour.toString()) }
+    var fu1Str by remember { mutableStateOf(s.followUpDays1.toString()) }
+    var fu2Str by remember { mutableStateOf(s.followUpDays2.toString()) }
+    var maxMbStr by remember { mutableStateOf(s.maxAttachmentMb.toString()) }
+    var imapPortStr by remember { mutableStateOf(s.imapPort.toString()) }
+
+    fun syncNumberStrings(src: ir.salisec.autosender.data.Settings) {
+        maxAiCallsStr = src.maxAiCallsPerEmail.toString()
+        youCountStr = src.youCount.toString()
+        smtpPortStr = src.smtpPort.toString()
+        delayStr = src.delaySeconds.toString()
+        jitterStr = src.jitterSeconds.toString()
+        dailyCapStr = src.dailyCap.toString()
+        bizStartStr = src.businessStartHour.toString()
+        bizEndStr = src.businessEndHour.toString()
+        fu1Str = src.followUpDays1.toString()
+        fu2Str = src.followUpDays2.toString()
+        maxMbStr = src.maxAttachmentMb.toString()
+        imapPortStr = src.imapPort.toString()
+    }
+
+    fun normalizedSettings(markAccountSetup: Boolean = false): ir.salisec.autosender.data.Settings {
+        val next = s.copy(
+            accountSetupDone = if (markAccountSetup) true else s.accountSetupDone,
+            maxAiCallsPerEmail = (maxAiCallsStr.trim().toIntOrNull() ?: s.maxAiCallsPerEmail).coerceIn(1, 3),
+            youCount = (youCountStr.trim().toIntOrNull() ?: s.youCount).coerceIn(1, 10),
+            smtpPort = (smtpPortStr.trim().toIntOrNull() ?: s.smtpPort).coerceIn(1, 65535),
+            delaySeconds = (delayStr.trim().toIntOrNull() ?: s.delaySeconds).coerceIn(15, 600),
+            jitterSeconds = (jitterStr.trim().toIntOrNull() ?: s.jitterSeconds).coerceIn(0, 120),
+            dailyCap = (dailyCapStr.trim().toIntOrNull() ?: s.dailyCap).coerceIn(1, 500),
+            businessStartHour = (bizStartStr.trim().toIntOrNull() ?: s.businessStartHour).coerceIn(0, 23),
+            businessEndHour = (bizEndStr.trim().toIntOrNull() ?: s.businessEndHour).coerceIn(1, 24),
+            followUpDays1 = (fu1Str.trim().toIntOrNull() ?: s.followUpDays1).coerceIn(1, 30),
+            followUpDays2 = (fu2Str.trim().toIntOrNull() ?: s.followUpDays2).coerceIn(1, 60),
+            maxAttachmentMb = (maxMbStr.trim().toIntOrNull() ?: s.maxAttachmentMb).coerceIn(1, 4),
+            imapPort = (imapPortStr.trim().toIntOrNull() ?: s.imapPort).coerceIn(1, 65535)
+        )
+        s = next
+        syncNumberStrings(next)
+        return next
+    }
+
     var saved by remember { mutableStateOf(false) }
     var confirmErase by remember { mutableStateOf(false) }
     var erased by remember { mutableStateOf(false) }
@@ -122,7 +173,7 @@ fun SettingsScreen(
                 s = s.copy(hcnsKey = it, hcnsModelVerified = false)
                 saved = false
             }
-            LabeledField("آدرس Endpoint", s.hcnsEndpoint) {
+            LabeledField("آدرس Endpoint", s.hcnsEndpoint, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)) {
                 s = s.copy(hcnsEndpoint = it, hcnsModelVerified = false)
                 saved = false
             }
@@ -149,10 +200,11 @@ fun SettingsScreen(
                 scope.launch {
                     probingHcns = true
                     hcnsStatus = null
-                    app.prefs.save(s)
+                    val curr = normalizedSettings()
+                    app.prefs.save(curr)
                     val res = app.ai.probeAndSelectBestModel(app.prefs.load())
                     res.onSuccess { probe ->
-                        val next = s.copy(
+                        val next = curr.copy(
                             hcnsModel = probe.selectedModel,
                             hcnsReviewModel = probe.reviewModel,
                             hcnsAvailableModels = probe.availableModels.joinToString(","),
@@ -197,8 +249,12 @@ fun SettingsScreen(
                 }
             }
 
-            LabeledField("حداکثر پاس کیفیت برای هر ایمیل (پیشنهاد ۳ برای بالاترین کیفیت)", s.maxAiCallsPerEmail.toString()) {
-                s = s.copy(maxAiCallsPerEmail = (it.toIntOrNull() ?: 3).coerceIn(1, 3))
+            LabeledField(
+                label = "حداکثر پاس کیفیت برای هر ایمیل (پیشنهاد ۳ برای بالاترین کیفیت)",
+                value = maxAiCallsStr,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            ) { raw ->
+                maxAiCallsStr = raw.filter { it.isDigit() }.take(1)
                 saved = false
             }
         }
@@ -262,7 +318,7 @@ fun SettingsScreen(
                 }
                 OutlinedButton(
                     onClick = {
-                        app.prefs.save(s)
+                        app.prefs.save(normalizedSettings())
                         saved = true
                     },
                     modifier = Modifier.weight(1f)
@@ -283,12 +339,16 @@ fun SettingsScreen(
                 s = s.copy(youKey = it, youVerified = false)
                 saved = false
             }
-            LabeledField("Endpoint جستجو", s.youEndpoint) {
+            LabeledField("Endpoint جستجو", s.youEndpoint, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)) {
                 s = s.copy(youEndpoint = it, youVerified = false)
                 saved = false
             }
-            LabeledField("تعداد نتایج برای هر دامنه (۱ تا ۱۰)", s.youCount.toString()) {
-                s = s.copy(youCount = (it.toIntOrNull() ?: 6).coerceIn(1, 10))
+            LabeledField(
+                label = "تعداد نتایج برای هر دامنه (۱ تا ۱۰)",
+                value = youCountStr,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            ) { raw ->
+                youCountStr = raw.filter { it.isDigit() }.take(2)
                 saved = false
             }
 
@@ -297,10 +357,11 @@ fun SettingsScreen(
                     scope.launch {
                         testingYou = true
                         youStatus = null
-                        app.prefs.save(s)
+                        val curr = normalizedSettings()
+                        app.prefs.save(curr)
                         val res = app.enricher.testConnection(app.prefs.load())
                         res.onSuccess { msg ->
-                            val next = s.copy(youVerified = true)
+                            val next = curr.copy(youVerified = true)
                             s = next
                             app.prefs.save(next)
                             saved = true
@@ -349,10 +410,10 @@ fun SettingsScreen(
             badgeColor = MaterialTheme.colorScheme.primary
         ) {
             LabeledField("نام نمایشی فرستنده", s.fromName) { s = s.copy(fromName = it); saved = false }
-            LabeledField("ایمیل فرستنده", s.fromEmail, placeholder = "security@yourdomain.com") {
+            LabeledField("ایمیل فرستنده", s.fromEmail, placeholder = "security@yourdomain.com", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)) {
                 s = s.copy(fromEmail = it); saved = false
             }
-            LabeledField("Reply-To (اختیاری)", s.replyTo) { s = s.copy(replyTo = it); saved = false }
+            LabeledField("Reply-To (اختیاری)", s.replyTo, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)) { s = s.copy(replyTo = it); saved = false }
             LabeledField("Selector اختصاصی DKIM (اختیاری، مثلاً mail یا brevo1)", s.dkimSelector) {
                 s = s.copy(dkimSelector = it); saved = false
             }
@@ -378,10 +439,15 @@ fun SettingsScreen(
                     s = s.copy(brevoKey = it); saved = false
                 }
             } else {
-                LabeledField("SMTP Host", s.smtpHost) { s = s.copy(smtpHost = it); saved = false }
+                LabeledField("SMTP Host", s.smtpHost, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)) { s = s.copy(smtpHost = it); saved = false }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    LabeledField("SMTP Port", s.smtpPort.toString(), modifier = Modifier.weight(1f)) {
-                        s = s.copy(smtpPort = it.toIntOrNull() ?: 587); saved = false
+                    LabeledField(
+                        "SMTP Port",
+                        smtpPortStr,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    ) { raw ->
+                        smtpPortStr = raw.filter { it.isDigit() }.take(5); saved = false
                     }
                     Column(Modifier.weight(1.2f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         SubTitle("امنیت SMTP")
@@ -403,14 +469,29 @@ fun SettingsScreen(
                 LabeledField("رمز SMTP", s.smtpPass, isSecret = true) { s = s.copy(smtpPass = it); saved = false }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                LabeledField("فاصله ارسال (ثانیه)", s.delaySeconds.toString(), modifier = Modifier.weight(1f)) {
-                    s = s.copy(delaySeconds = (it.toIntOrNull() ?: 75).coerceIn(15, 600)); saved = false
+                LabeledField(
+                    "فاصله ارسال (ثانیه)",
+                    delayStr,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                ) { raw ->
+                    delayStr = raw.filter { it.isDigit() }.take(3); saved = false
                 }
-                LabeledField("نوسان تصادفی", s.jitterSeconds.toString(), modifier = Modifier.weight(1f)) {
-                    s = s.copy(jitterSeconds = (it.toIntOrNull() ?: 25).coerceIn(0, 120)); saved = false
+                LabeledField(
+                    "نوسان تصادفی",
+                    jitterStr,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                ) { raw ->
+                    jitterStr = raw.filter { it.isDigit() }.take(3); saved = false
                 }
-                LabeledField("سقف روزانه", s.dailyCap.toString(), modifier = Modifier.weight(1f)) {
-                    s = s.copy(dailyCap = (it.toIntOrNull() ?: 100).coerceIn(1, 500)); saved = false
+                LabeledField(
+                    "سقف روزانه",
+                    dailyCapStr,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                ) { raw ->
+                    dailyCapStr = raw.filter { it.isDigit() }.take(3); saved = false
                 }
             }
 
@@ -421,20 +502,40 @@ fun SettingsScreen(
             )
             if (s.enforceBusinessHours) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    LabeledField("شروع ساعت کاری (۰-۲۳)", s.businessStartHour.toString(), modifier = Modifier.weight(1f)) {
-                        s = s.copy(businessStartHour = (it.toIntOrNull() ?: 9).coerceIn(0, 23)); saved = false
+                    LabeledField(
+                        "شروع ساعت کاری (۰-۲۳)",
+                        bizStartStr,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    ) { raw ->
+                        bizStartStr = raw.filter { it.isDigit() }.take(2); saved = false
                     }
-                    LabeledField("پایان ساعت کاری (۱-۲۴)", s.businessEndHour.toString(), modifier = Modifier.weight(1f)) {
-                        s = s.copy(businessEndHour = (it.toIntOrNull() ?: 17).coerceIn(1, 24)); saved = false
+                    LabeledField(
+                        "پایان ساعت کاری (۱-۲۴)",
+                        bizEndStr,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    ) { raw ->
+                        bizEndStr = raw.filter { it.isDigit() }.take(2); saved = false
                     }
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                LabeledField("یادآور پیگیری اول (روز)", s.followUpDays1.toString(), modifier = Modifier.weight(1f)) {
-                    s = s.copy(followUpDays1 = (it.toIntOrNull() ?: 2).coerceIn(1, 30)); saved = false
+                LabeledField(
+                    "یادآور پیگیری اول (روز)",
+                    fu1Str,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                ) { raw ->
+                    fu1Str = raw.filter { it.isDigit() }.take(2); saved = false
                 }
-                LabeledField("یادآور پیگیری دوم (روز)", s.followUpDays2.toString(), modifier = Modifier.weight(1f)) {
-                    s = s.copy(followUpDays2 = (it.toIntOrNull() ?: 7).coerceIn(1, 60)); saved = false
+                LabeledField(
+                    "یادآور پیگیری دوم (روز)",
+                    fu2Str,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                ) { raw ->
+                    fu2Str = raw.filter { it.isDigit() }.take(2); saved = false
                 }
             }
         }
@@ -442,8 +543,12 @@ fun SettingsScreen(
         // 6. Attachment Policy
         Section(header = stringResource(R.string.policy_title), icon = Icons.Default.Security) {
             Chip(stringResource(R.string.policy_mandatory), GreenOk)
-            LabeledField(stringResource(R.string.policy_cap), s.maxAttachmentMb.toString()) {
-                s = s.copy(maxAttachmentMb = (it.toIntOrNull() ?: 4).coerceIn(1, 4)); saved = false
+            LabeledField(
+                stringResource(R.string.policy_cap),
+                maxMbStr,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            ) { raw ->
+                maxMbStr = raw.filter { it.isDigit() }.take(1); saved = false
             }
             SubTitle(stringResource(R.string.policy_note))
         }
@@ -451,11 +556,16 @@ fun SettingsScreen(
         // 7. IMAP & Opt-out + Live Verifier
         Section(header = "۶. صندوق ورودی (IMAP) و تست اتصال ایمیل", icon = Icons.Default.MarkEmailRead) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                LabeledField("IMAP Host", s.imapHost, modifier = Modifier.weight(2f)) {
+                LabeledField("IMAP Host", s.imapHost, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.weight(2f)) {
                     s = s.copy(imapHost = it); saved = false
                 }
-                LabeledField("Port", s.imapPort.toString(), modifier = Modifier.weight(1f)) {
-                    s = s.copy(imapPort = it.toIntOrNull() ?: 993); saved = false
+                LabeledField(
+                    "Port",
+                    imapPortStr,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                ) { raw ->
+                    imapPortStr = raw.filter { it.isDigit() }.take(5); saved = false
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -480,7 +590,7 @@ fun SettingsScreen(
                     scope.launch {
                         testingMail = true
                         mailStatus = null
-                        val current = s.copy(accountSetupDone = true)
+                        val current = normalizedSettings(markAccountSetup = true)
                         app.prefs.save(current)
                         val res = EmailAutoconfig.verifyIncomingAndOutgoing(
                             client = app.ok,
@@ -511,7 +621,7 @@ fun SettingsScreen(
             icon = Icons.Default.Save,
             modifier = Modifier.testTag("settings_save_button")
         ) {
-            app.prefs.save(s.copy(accountSetupDone = true))
+            app.prefs.save(normalizedSettings(markAccountSetup = true))
             saved = true
         }
         if (saved) Chip("تنظیمات و الگوها با موفقیت رمزنگاری و ذخیره شد ✓", GreenOk)
@@ -542,7 +652,9 @@ fun SettingsScreen(
                     confirmErase = false
                     scope.launch {
                         app.clearAllData()
-                        s = app.prefs.load()
+                        val fresh = app.prefs.load()
+                        s = fresh
+                        syncNumberStrings(fresh)
                         saved = false
                         hcnsStatus = null
                         youStatus = null

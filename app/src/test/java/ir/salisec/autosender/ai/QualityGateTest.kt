@@ -96,4 +96,22 @@ class QualityGateTest {
         val unsubCount = second.body.split(settings.unsubscribeFooter.trim()).size - 1
         assertTrue("Expected exactly 1 unsubscribe footer, got $unsubCount", unsubCount == 1)
     }
+
+    @Test
+    fun parseAiResultStripsReasoningThinkTags() {
+        val client = AiClient(okhttp3.OkHttpClient())
+        val raw = """
+            <think>
+            { "draft": 1 }
+            موضوع: عنوان تستی داخل فکر
+            </think>
+            موضوع: بررسی وضعیت امنیتی دامنه example.com
+            سلام؛ گزارش دامنه آماده است.
+        """.trimIndent()
+        val parsed = client.parseAiResult(raw)
+        assertTrue(parsed.subject == "بررسی وضعیت امنیتی دامنه example.com")
+        assertFalse(parsed.body.contains("<think>"))
+        assertFalse(parsed.body.contains("عنوان تستی داخل فکر"))
+        assertTrue(parsed.body.contains("سلام؛ گزارش دامنه آماده است."))
+    }
 }

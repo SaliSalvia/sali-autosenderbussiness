@@ -6,15 +6,12 @@ import androidx.documentfile.provider.DocumentFile
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
-import java.io.IOException
-import java.io.InputStream
 
 /** Reads the user-selected "sitest" folder (SAF).
  *
  *  Fast folder indexing + automatic matching by email/domain.
- *  Parses at most six PDFs per domain, prioritizing a filename-matched trial pair
- *  so older eligible attachments are not hidden by newer unrelated reports. */
+ *  Picks the 2 newest PDFs in each domain folder for attachment, while reading
+ *  recent PDFs + sidecar JSON for grounded AI marketing copy. */
 object ReportReader {
 
     private val freeEmailDomains = setOf(
@@ -91,7 +88,7 @@ object ReportReader {
             if (c.length < 3) continue
             subfolders.firstOrNull { f ->
                 val fn = f.name?.trim()?.lowercase().orEmpty()
-                fn.startsWith(c) || c.startsWith(fn)
+                fn.length >= 3 && !fn.startsWith(".") && (fn.startsWith(c) || c.startsWith(fn))
             }?.let { return it }
         }
 
@@ -133,10 +130,7 @@ object ReportReader {
     fun jsonIn(folder: DocumentFile): DocumentFile? =
         folder.listFiles().firstOrNull { it.isFile && it.name?.lowercase()?.endsWith(".json") == true }
 
-    private const val MAX_PDFS_FOR_AI = 6
-    internal const val MAX_SIDECAR_BYTES = 256 * 1024
-
-    /** Main entry: parse at most six PDFs, prioritizing a matching trial pair, plus an optional JSON sidecar.
+    /** Main entry: read newest PDFs (up to 6 for speed, always including the 2 newest attached PDFs) + optional JSON sidecar.
      *  Uses Room [pdfCacheDao] when available so unchanged PDFs are not re-parsed by PDFBox. */
     suspend fun readBundle(
         context: Context,
@@ -150,9 +144,7 @@ object ReportReader {
 
         val sidecar = children.firstOrNull { it.isFile && it.name?.lowercase()?.endsWith(".json") == true }?.let { f ->
             try {
-                context.contentResolver.openInputStream(f.uri)?.use { input ->
-                    readBoundedText(input, MAX_SIDECAR_BYTES)
-                }
+                context.contentResolver.openInputStream(f.uri)?.bufferedReader()?.use { it.readText() }
             } catch (e: Exception) {
                 warnings.add("خواندن فایل JSON کنار گزارش ناموفق بود: " + f.name)
                 null
@@ -160,20 +152,7 @@ object ReportReader {
         }
 
         val allPdfFiles = pdfsFrom(children)
-        val metadata = allPdfFiles.map { file ->
-            PdfDoc(
-                name = file.name ?: "report.pdf",
-                uri = file.uri.toString(),
-                lastModified = file.lastModified(),
-                sizeBytes = file.length()
-            )
-        }
-        val prioritizedUris = AttachmentPolicy.selectTrialCandidates(metadata).map { it.uri }.toSet()
-        val prioritizedTrialFiles = allPdfFiles.filter { it.uri.toString() in prioritizedUris }
-        val remainingFiles = allPdfFiles.filterNot { it.uri.toString() in prioritizedUris }
-        val toParse = (prioritizedTrialFiles + remainingFiles)
-            .distinctBy { it.uri.toString() }
-            .take(MAX_PDFS_FOR_AI)
+        val toParse = allPdfFiles.take(6)
 
         for (f in toParse) {
             val name = f.name ?: "report.pdf"
@@ -257,12 +236,12 @@ object ReportReader {
         if (allPdfFiles.isEmpty()) {
             warnings.add("هیچ PDF در پوشه ${folder.name} پیدا نشد")
         }
-        val selected = AttachmentPolicy.selectTrialPair(docs)
-        if (allPdfFiles.size > MAX_PDFS_FOR_AI) {
-            warnings.add("از ${allPdfFiles.size} فایل PDF، حداکثر ${MAX_PDFS_FOR_AI} فایل برای تحلیل خوانده شد؛ جفت trial در اولویت قرار گرفت")
+        val selected = AttachmentPolicy.selectNewestPair(docs)
+        if (selected.size == 1 && allPdfFiles.size == 1) {
+            warnings.add("فقط ۱ فایل PDF در پوشه وجود دارد؛ همان ۱ فایل پیوست می‌شود")
         }
-        if (selected.isEmpty() && allPdfFiles.isNotEmpty()) {
-            warnings.add("جفت معتبر فارسی/انگلیسی trial با دقیقاً دو صفحه و قابلیت خواندن پیدا نشد؛ هیچ PDFای پیوست نخواهد شد")
+        if (allPdfFiles.size > 2) {
+            warnings.add("از ${allPdfFiles.size} فایل PDF موجود، ۲ مورد جدیدترین برای پیوست انتخاب شدند")
         }
 
         return ReportBundle(
@@ -290,36 +269,11 @@ object ReportReader {
         null
     }
 
-    /**
-     * Sidecar files are untrusted input. Enforce a byte ceiling before parsing,
-     * and never let a sidecar for another customer/domain become authoritative.
-     */
-    internal fun readBoundedText(input: InputStream, maxBytes: Int): String {
-        require(maxBytes > 0) { "maxBytes must be positive" }
-        val output = ByteArrayOutputStream(minOf(maxBytes, 8 * 1024))
-        val buffer = ByteArray(8 * 1024)
-        var total = 0
-        while (true) {
-            val count = input.read(buffer)
-            if (count < 0) break
-            total += count
-            if (total > maxBytes) throw IOException("Sidecar exceeds the allowed size")
-            output.write(buffer, 0, count)
-        }
-        return String(output.toByteArray(), Charsets.UTF_8)
-    }
-
-    /** JSON sidecar is authoritative for validated numbers; PDF text is still used for evidence. */
-    internal fun parseSidecar(domain: String, text: String): ReportData? {
-        return try {
-            val o = JSONObject(text)
-            val expectedDomain = domain.trim().lowercase().removePrefix("www.").trimEnd('.')
-            val declaredDomain = o.optString("domain", expectedDomain)
-                .trim().lowercase().removePrefix("www.").trimEnd('.')
-            if (declaredDomain.isBlank() || !declaredDomain.equals(expectedDomain, ignoreCase = true)) {
-                null
-            } else ReportData(
-            domain = expectedDomain,
+    /** JSON sidecar is authoritative for numbers; PDF text is still used for evidence. */
+    private fun parseSidecar(domain: String, text: String): ReportData? = try {
+        val o = JSONObject(text)
+        ReportData(
+            domain = o.optString("domain", domain).ifBlank { domain },
             scanId = jStr(o, "scan_id"),
             score = jInt(o, "score"),
             findings = jInt(o, "findings"),
@@ -332,33 +286,21 @@ object ReportReader {
             freeFindingImpact = jStr(o, "free_finding_impact"),
             freeFindingSolution = jStr(o, "free_finding_solution"),
             subdomains = jInt(o, "subdomains")
-            )
-        } catch (e: Exception) {
-            null
-        }
+        )
+    } catch (e: Exception) {
+        null
     }
 
-    private fun jInt(o: JSONObject, key: String): Int? {
-        val value = when (val raw = o.opt(key)) {
-            is Number -> {
-                val number = raw.toDouble()
-                if (!number.isFinite() || number % 1.0 != 0.0 || number < 0.0 || number > 100_000.0) {
-                    return null
-                }
-                number.toInt()
-            }
-            is String -> raw.trim().takeIf { it.matches(Regex("""[0-9]{1,6}""")) }?.toIntOrNull()
-            else -> null
-        } ?: return null
-
-        if (key == "score" && value !in 0..100) return null
-        return value
+    private fun jInt(o: JSONObject, key: String): Int? = when (val v = o.opt(key)) {
+        is Number -> v.toInt()
+        is String -> v.filter { it.isDigit() || it == '-' }.toIntOrNull()
+        else -> null
     }
 
     private fun jStr(o: JSONObject, key: String): String? =
         o.optString(key, "").trim().takeIf { it.isNotBlank() && it != "null" }
 
-    /** Extract real facts from the parsed PDF subset (never invents numbers). */
+    /** Extract real facts from the text of ALL PDFs (never invents numbers). */
     fun parsePdfFacts(domain: String, docs: List<PdfDoc>): ReportData? {
         val combined = docs.filter { it.readOk }.joinToString("\n") { it.text }
         if (combined.isBlank()) return null

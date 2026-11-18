@@ -22,7 +22,7 @@ data class MessageEntity(
     val subject: String = "",
     val body: String = "",
     val preheader: String = "",
-    /** Verified Persian/English two-page trial PDF URIs, separated by "||". */
+    /** Up to 2 newest PDF URIs, separated by "||". */
     val pdfPaths: String = "",
     /** Exact file names of the attached PDFs. */
     val attachmentNames: String = "",
@@ -154,14 +154,6 @@ interface MessageDao {
     )
     suspend fun claim(id: Long, owner: String, until: Long, now: Long): Int
 
-    /** A claim may return to QUEUED only when cancellation is observed before the provider call. */
-    @Query(
-        "UPDATE messages SET status = 'QUEUED', leaseOwner = NULL, leaseUntil = NULL, " +
-            "lastError = :reason, updatedAt = :now " +
-            "WHERE id = :id AND status = 'SENDING' AND leaseOwner = :owner"
-    )
-    suspend fun releaseClaimBeforeSend(id: Long, owner: String, reason: String, now: Long): Int
-
     @Query(
         "UPDATE messages SET status = 'UNCERTAIN', leaseOwner = NULL, leaseUntil = NULL, " +
             "lastError = :reason, updatedAt = :now " +
@@ -202,10 +194,6 @@ interface LogDao {
     suspend fun recent(): List<LogEntity>
 
     @Insert suspend fun insert(l: LogEntity)
-
-    /** Deletes operational log rows older than the retention cutoff. */
-    @Query("DELETE FROM logs WHERE ts < :cutoff")
-    suspend fun deleteBefore(cutoff: Long): Int
 
     @Query("DELETE FROM logs") suspend fun clearAll()
 }

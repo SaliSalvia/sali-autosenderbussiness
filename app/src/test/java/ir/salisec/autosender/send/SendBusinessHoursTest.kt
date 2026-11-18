@@ -65,4 +65,21 @@ class SendBusinessHoursTest {
         assertTrue(html.contains("جزئیات در PDF پیوست است."))
         assertTrue(html.contains("با حذف پاسخ دهید."))
     }
+
+    @Test
+    fun buildHtmlEmailOnlyStylesTailFooterBlocksNotBodyKeywords() {
+        val body = "سلام\n\nبرای حذف کامل ریسک آسیب‌پذیری روی https://example.com گزارش را ببینید.\n\n---\nدر صورت عدم تمایل واژه «حذف» را ارسال کنید."
+        val html = buildHtmlEmail(
+            OutgoingMessage(
+                to = "cto@example.com",
+                subject = "گزارش فنی",
+                htmlBody = body,
+                textBody = body
+            )
+        )
+        // Normal body paragraph containing 'حذف' and URL must keep main body typography (#111827, 14.5px)
+        assertTrue(html.contains("color:#111827\">برای حذف کامل ریسک آسیب‌پذیری"))
+        // Tail unsubscribe block gets subtle footer styling (#4B5563, 12.5px)
+        assertTrue(html.contains("color:#4B5563\">---<br>در صورت عدم تمایل"))
+    }
 }

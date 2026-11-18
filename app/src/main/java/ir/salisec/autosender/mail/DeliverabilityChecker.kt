@@ -227,7 +227,7 @@ class DeliverabilityChecker(private val client: OkHttpClient) {
                         key = "attachments",
                         title = "پیوست‌ها و محتوای صف ارسال",
                         severity = CheckSeverity.PASS,
-                        detail = "همه ${queuedMessages.size} پیام دارای پیوست PDF تاییدشده با سقف مجاز (${AttachmentGuard.MAX_PER_FILE_BYTES / 1024 / 1024}MB/فایل و ۲۰MB کل) هستند."
+                        detail = "همه ${queuedMessages.size} پیام دارای پیوست PDF تاییدشده با سقف مجاز (${s.maxAttachmentMb.coerceIn(1, 4)}MB/فایل و ۲۰MB کل) هستند."
                     )
                 )
             }
@@ -271,7 +271,12 @@ class DeliverabilityChecker(private val client: OkHttpClient) {
                 client.newCall(req).execute().use { resp ->
                     if (!resp.isSuccessful) continue
                     val root = JSONObject(resp.body?.string().orEmpty())
-                    val ans = root.optJSONArray("Answer") ?: return emptyList()
+                    val status = root.optInt("Status", 0)
+                    val ans = root.optJSONArray("Answer")
+                    if (ans == null) {
+                        if (status != 0 && status != 3) continue
+                        return emptyList()
+                    }
                     val out = mutableListOf<String>()
                     val wantTypeCode = when (type) {
                         "TXT" -> 16

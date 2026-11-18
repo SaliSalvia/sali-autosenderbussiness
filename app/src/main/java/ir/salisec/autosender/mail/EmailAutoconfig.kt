@@ -161,20 +161,21 @@ object EmailAutoconfig {
         var inMsg = if (!testIncoming) "بررسی ورودی انتخاب نشد" else ""
         if (testIncoming) {
             try {
+                val safeImapPort = if (s.imapPort in 1..65535) s.imapPort else if (s.imapSecurity == "STARTTLS") 143 else 993
                 val props = Properties().apply {
                     val proto = if (s.imapSecurity == "STARTTLS") "imap" else "imaps"
                     put("mail.store.protocol", proto)
                     if (proto == "imap") {
-                        put("mail.imap.host", s.imapHost)
-                        put("mail.imap.port", s.imapPort.toString())
+                        put("mail.imap.host", s.imapHost.trim())
+                        put("mail.imap.port", safeImapPort.toString())
                         put("mail.imap.starttls.enable", "true")
                         put("mail.imap.starttls.required", "true")
                         put("mail.imap.ssl.checkserveridentity", "true")
                         put("mail.imap.connectiontimeout", "15000")
                         put("mail.imap.timeout", "15000")
                     } else {
-                        put("mail.imaps.host", s.imapHost)
-                        put("mail.imaps.port", s.imapPort.toString())
+                        put("mail.imaps.host", s.imapHost.trim())
+                        put("mail.imaps.port", safeImapPort.toString())
                         put("mail.imaps.ssl.checkserveridentity", "true")
                         put("mail.imaps.connectiontimeout", "15000")
                         put("mail.imaps.timeout", "15000")
@@ -182,7 +183,7 @@ object EmailAutoconfig {
                 }
                 val proto = if (s.imapSecurity == "STARTTLS") "imap" else "imaps"
                 val store = Session.getInstance(props).getStore(proto)
-                store.connect(s.imapHost.trim(), s.imapPort, s.imapUser.trim(), s.imapPass)
+                store.connect(s.imapHost.trim(), safeImapPort, s.imapUser.trim(), s.imapPass)
                 try {
                     val inbox = store.getFolder("INBOX")
                     inbox.open(Folder.READ_ONLY)
@@ -229,11 +230,12 @@ object EmailAutoconfig {
             } else {
                 try {
                     val useSsl = s.smtpSecurity == "SSL" || s.smtpPort == 465
+                    val safeSmtpPort = if (s.smtpPort in 1..65535) s.smtpPort else if (useSsl) 465 else 587
                     val proto = if (useSsl) "smtps" else "smtp"
                     val props = Properties().apply {
                         if (useSsl) {
                             put("mail.smtps.host", s.smtpHost.trim())
-                            put("mail.smtps.port", s.smtpPort.toString())
+                            put("mail.smtps.port", safeSmtpPort.toString())
                             put("mail.smtps.auth", "true")
                             put("mail.smtps.ssl.enable", "true")
                             put("mail.smtps.ssl.checkserveridentity", "true")
@@ -241,7 +243,7 @@ object EmailAutoconfig {
                             put("mail.smtps.timeout", "15000")
                         } else {
                             put("mail.smtp.host", s.smtpHost.trim())
-                            put("mail.smtp.port", s.smtpPort.toString())
+                            put("mail.smtp.port", safeSmtpPort.toString())
                             put("mail.smtp.auth", "true")
                             put("mail.smtp.starttls.enable", "true")
                             put("mail.smtp.starttls.required", "true")
@@ -254,10 +256,13 @@ object EmailAutoconfig {
                         override fun getPasswordAuthentication() = PasswordAuthentication(s.smtpUser.trim(), s.smtpPass)
                     })
                     val transport = session.getTransport(proto)
-                    transport.connect(s.smtpHost.trim(), s.smtpPort, s.smtpUser.trim(), s.smtpPass)
-                    transport.close()
+                    try {
+                        transport.connect(s.smtpHost.trim(), safeSmtpPort, s.smtpUser.trim(), s.smtpPass)
+                    } finally {
+                        try { if (transport.isConnected) transport.close() } catch (_: Exception) {}
+                    }
                     outOk = true
-                    outMsg = "احراز هویت خروجی SMTP موفق بود ✓ (${s.smtpHost}:${s.smtpPort})"
+                    outMsg = "احراز هویت خروجی SMTP موفق بود ✓ (${s.smtpHost.trim()}:$safeSmtpPort)"
                 } catch (e: Exception) {
                     outOk = false
                     outMsg = "خطای ورود SMTP: " + (e.message?.take(140) ?: "احراز هویت ناموفق")

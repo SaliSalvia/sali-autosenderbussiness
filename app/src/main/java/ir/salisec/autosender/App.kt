@@ -1,8 +1,6 @@
 package ir.salisec.autosender
 
 import android.app.Application
-import android.content.Intent
-import android.net.Uri
 import androidx.room.Room
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import ir.salisec.autosender.ai.AiClient
@@ -10,7 +8,8 @@ import ir.salisec.autosender.ai.AiResult
 import ir.salisec.autosender.ai.Enricher
 import ir.salisec.autosender.ai.QualityReport
 import ir.salisec.autosender.data.AppDatabase
-import ir.salisec.autosender.data.CampaignRepository
+import ir.salisec.autosender.data.CampaignEntity
+import ir.salisec.autosender.data.CampaignSnapshot
 import ir.salisec.autosender.data.CampaignSnapshotData
 import ir.salisec.autosender.data.CompanyContext
 import ir.salisec.autosender.data.Contact
@@ -19,7 +18,6 @@ import ir.salisec.autosender.data.MIGRATION_2_3
 import ir.salisec.autosender.data.MIGRATION_3_4
 import ir.salisec.autosender.data.MIGRATION_4_5
 import ir.salisec.autosender.data.MIGRATION_5_6
-import ir.salisec.autosender.data.LogRetentionPolicy
 import ir.salisec.autosender.data.Prefs
 import ir.salisec.autosender.data.StudioDraftEntity
 import ir.salisec.autosender.mail.DeliverabilityChecker
@@ -31,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -86,6 +85,21 @@ class CampaignSession {
     val drafts = MutableStateFlow<List<CampaignDraftItem>>(emptyList())
     val persistedDrafts = MutableStateFlow<Map<String, StudioDraftEntity>>(emptyMap())
     val deliverability = MutableStateFlow<DeliverabilityReport?>(null)
+    @Volatile var lastScanSignature: String = ""
+    @Volatile var lastScanSitestUri: String = ""
+
+    fun updateDraftAtomic(key: String, transform: (CampaignDraftItem) -> CampaignDraftItem): Pair<CampaignDraftItem, CampaignDraftItem>? {
+        var transition: Pair<CampaignDraftItem, CampaignDraftItem>? = null
+        drafts.update { list ->
+            val idx = list.indexOfFirst { it.key == key }
+            if (idx < 0) return@update list
+            val before = list[idx]
+            val after = transform(before)
+            transition = before to after
+            list.toMutableList().apply { set(idx, after) }
+        }
+        return transition
+    }
 
     fun restore(s: CampaignSnapshotData, storedDrafts: List<StudioDraftEntity> = emptyList()) {
         domains.value = s.domains
@@ -107,6 +121,8 @@ class CampaignSession {
         persistedDrafts.value = storedDrafts.associateBy { it.key }
         matches.value = emptyList()
         drafts.value = emptyList()
+        lastScanSignature = ""
+        lastScanSitestUri = ""
     }
 
     fun reset() {
@@ -118,6 +134,8 @@ class CampaignSession {
         contexts.value = emptyMap()
         drafts.value = emptyList()
         persistedDrafts.value = emptyMap()
+        lastScanSignature = ""
+        lastScanSitestUri = ""
     }
 }
 
@@ -129,7 +147,6 @@ class App : Application() {
     lateinit var inbox: InboxClient
     lateinit var deliverability: DeliverabilityChecker
     lateinit var engine: SendEngine
-    lateinit var campaignRepository: CampaignRepository
     val session = CampaignSession()
     val ok: OkHttpClient = OkHttpClient()
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -146,15 +163,11 @@ class App : Application() {
         inbox = InboxClient()
         deliverability = DeliverabilityChecker(ok)
         engine = SendEngine(this, db, prefs, ok)
-        campaignRepository = CampaignRepository(db.campaignDao(), db.studioDraftDao())
 
-        val restored = runBlocking(Dispatchers.IO) { campaignRepository.restore() }
-        session.restore(restored.snapshot, restored.drafts.values.toList())
-        appScope.launch {
-            runCatching {
-                db.logDao().deleteBefore(LogRetentionPolicy.cutoff(System.currentTimeMillis()))
-            }
+        val (saved, storedDrafts) = runBlocking(Dispatchers.IO) {
+            db.campaignDao().active() to db.studioDraftDao().all()
         }
+        session.restore(CampaignSnapshot.decode(saved?.payload), storedDrafts)
         persistCampaign()
     }
 
@@ -179,44 +192,25 @@ class App : Application() {
             promptTokens = item.promptTokens,
             completionTokens = item.completionTokens
         )
-        session.persistedDrafts.value = session.persistedDrafts.value + (item.key to entity)
+        session.persistedDrafts.update { it + (item.key to entity) }
         appScope.launch {
-            campaignRepository.saveDraft(entity)
+            db.studioDraftDao().upsert(entity)
         }
     }
 
     suspend fun clearAllData() = withContext(Dispatchers.IO) {
-        // Stop queued delivery before erasing records/settings so no later queue
-        // iteration can submit another message after the user requested deletion.
-        engine.cancel()
-
-        // Release the persisted SAF grant as part of the in-app data-erasure flow.
-        val selectedTree = prefs.load().sitestFolderUri.trim()
-        if (selectedTree.isNotEmpty()) {
-            runCatching {
-                contentResolver.releasePersistableUriPermission(
-                    Uri.parse(selectedTree),
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            }
-            runCatching {
-                contentResolver.releasePersistableUriPermission(
-                    Uri.parse(selectedTree),
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-            }
-        }
-
         db.messageDao().clearAll()
         db.logDao().clearAll()
-        campaignRepository.clear()
+        db.campaignDao().clearAll()
         db.companyCacheDao().clearAll()
+        db.studioDraftDao().clearAll()
         db.pdfCacheDao().clearAll()
         prefs.clear()
         enricher.clearCache()
         session.reset()
         session.deliverability.value = null
         engine.refreshLogs()
+        engine.notifyQueueChanged()
     }
 
     private fun persistCampaign() {
@@ -227,14 +221,16 @@ class App : Application() {
                 session.selected,
                 session.contexts
             ) { domains, contacts, selected, contexts ->
-                CampaignSnapshotData(
+                CampaignSnapshot.encode(
                     domains = domains,
                     contacts = contacts.values.toList(),
                     selected = selected,
                     contexts = contexts.values.toList()
                 )
-            }.collect { snapshot ->
-                campaignRepository.saveSnapshot(snapshot)
+            }.collect { json ->
+                db.campaignDao().upsert(
+                    CampaignEntity("active", json, System.currentTimeMillis())
+                )
             }
         }
     }

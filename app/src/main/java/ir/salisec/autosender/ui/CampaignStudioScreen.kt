@@ -102,12 +102,14 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -170,12 +172,16 @@ fun CampaignStudioScreen(
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            val content = try {
-                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
-            } catch (_: Exception) {
-                ""
+            scope.launch {
+                val content = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                    } catch (_: Exception) {
+                        ""
+                    }
+                }
+                if (content.isNotBlank()) app.session.rawEmailsInput.value = content
             }
-            if (content.isNotBlank()) app.session.rawEmailsInput.value = content
         }
     }
 
@@ -275,6 +281,8 @@ fun CampaignStudioScreen(
                 val readyKeys = result.filter { it.readyForApproval }.map { it.key }.toSet()
                 val preserved = app.session.selected.value.intersect(readyKeys)
                 app.session.selected.value = if (preserved.isNotEmpty()) preserved else readyKeys
+                app.session.lastScanSignature = contactsSignatureForScan(contacts)
+                app.session.lastScanSitestUri = sitestUri
             } catch (e: SecurityException) {
                 scanError = "مجوز دسترسی به پوشه sitest منقضی شده؛ لطفاً دوباره انتخاب کنید."
             } catch (e: Exception) {
@@ -284,15 +292,23 @@ fun CampaignStudioScreen(
         }
     }
 
-    // Automatic matching whenever emails or sitest folder changes
-    val contactsSignature = remember(contacts) { contacts.joinToString("|") { it.email } }
+    // Automatic matching whenever emails or sitest folder changes (skip rescan if already scanned for same inputs)
+    val contactsSignature = remember(contacts) { contactsSignatureForScan(contacts) }
     LaunchedEffect(contactsSignature, sitestUri) {
         if (contacts.isNotEmpty() && sitestUri.isNotBlank()) {
+            if (app.session.lastScanSignature == contactsSignature &&
+                app.session.lastScanSitestUri == sitestUri &&
+                matches.isNotEmpty()
+            ) {
+                return@LaunchedEffect
+            }
             delay(400)
             runAutoMatchScan()
         } else if (contacts.isEmpty()) {
             app.session.matches.value = emptyList()
             app.session.selected.value = emptySet()
+            app.session.lastScanSignature = ""
+            app.session.lastScanSitestUri = ""
         }
     }
 
@@ -408,39 +424,37 @@ fun CampaignStudioScreen(
     }
 
     fun updateDraft(key: String, persist: Boolean = true, transform: (CampaignDraftItem) -> CampaignDraftItem) {
-        val list = app.session.drafts.value.toMutableList()
-        val idx = list.indexOfFirst { it.key == key }
-        if (idx < 0) return
-        val current = list[idx]
-        val next = transform(current)
-        val scores = matches.mapNotNull { it.report?.score }
+        val scores = app.session.matches.value.mapNotNull { it.report?.score }
         val aggregate = if (scores.isEmpty()) null else AggregateStats(scores.size, scores.average().toInt())
-        val reviewed = if (next.generated) {
-            val q = app.ai.check(
-                result = next.toResult(),
-                s = app.prefs.load(),
-                bundle = next.match.bundle,
-                aggregate = aggregate,
-                contactName = next.name,
-                isFollowUp = false,
-                domain = next.domain,
-                email = next.email
-            )
-            next.copy(quality = q)
-        } else next
+        val currentSettings = app.prefs.load()
+        val transition = app.session.updateDraftAtomic(key) { current ->
+            val next = transform(current)
+            val reviewed = if (next.generated) {
+                val q = app.ai.check(
+                    result = next.toResult(),
+                    s = currentSettings,
+                    bundle = next.match.bundle,
+                    aggregate = aggregate,
+                    contactName = next.name,
+                    isFollowUp = false,
+                    domain = next.domain,
+                    email = next.email
+                )
+                next.copy(quality = q)
+            } else next
+            if (current.approved) reviewed.copy(approved = false) else reviewed
+        } ?: return
 
-        if (current.approved && !current.messageUuid.isNullOrBlank()) {
-            val uuid = current.messageUuid
+        val (before, after) = transition
+        if (before.approved && !before.messageUuid.isNullOrBlank()) {
+            val uuid = before.messageUuid
             scope.launch {
                 app.db.messageDao().demote(uuid, "متن پس از تأیید ویرایش شد؛ نیاز به تأیید دوباره")
                 app.engine.notifyQueueChanged()
             }
         }
-        val finalItem = if (current.approved) reviewed.copy(approved = false) else reviewed
-        list[idx] = finalItem
-        app.session.drafts.value = list
-        if (persist && finalItem.generated) {
-            app.persistDraft(finalItem)
+        if (persist && after.generated) {
+            app.persistDraft(after)
         }
     }
 
@@ -469,10 +483,14 @@ fun CampaignStudioScreen(
             return "${item.domain}: " + q.blockers.joinToString(" | ")
         }
         val s = app.prefs.load()
+        val maxAttachmentBytes = minOf(
+            AttachmentGuard.MAX_PER_FILE_BYTES,
+            s.maxAttachmentMb.coerceIn(1, 4) * 1024L * 1024L
+        )
         val snapshots = try {
             withContext(Dispatchers.IO) {
                 item.match.attachmentUris.map { uri ->
-                    AttachmentSnapshotReader.read(context = app, uriString = uri)
+                    AttachmentSnapshotReader.read(context = app, uriString = uri, maxBytes = maxAttachmentBytes)
                 }
             }
         } catch (e: Exception) {
@@ -519,14 +537,10 @@ fun CampaignStudioScreen(
             else app.db.messageDao().insert(entity)
         }
         app.engine.notifyQueueChanged()
-        val list = app.session.drafts.value.toMutableList()
-        val idx = list.indexOfFirst { it.key == item.key }
-            if (idx >= 0) {
-                val approvedItem = item.copy(approved = true, quality = q, messageUuid = uuid, error = null)
-                list[idx] = approvedItem
-                app.session.drafts.value = list
-                app.persistDraft(approvedItem)
-            }
+        val transition = app.session.updateDraftAtomic(item.key) { current ->
+            current.copy(approved = true, quality = q, messageUuid = uuid, error = null)
+        }
+        transition?.second?.let { app.persistDraft(it) }
             return null
         } finally {
             approvingKeys = approvingKeys - item.key
@@ -575,7 +589,7 @@ fun CampaignStudioScreen(
                 val scores = matches.mapNotNull { it.report?.score }
                 val aggregate = if (scores.isEmpty()) null else AggregateStats(scores.size, scores.average().toInt())
                 val total = keysToGenerate.size
-                var done = 0
+                val done = AtomicInteger(0)
                 val gate = Semaphore(3)
 
                 coroutineScope {
@@ -592,8 +606,7 @@ fun CampaignStudioScreen(
                                         ?.takeIf { it.summary.isNotBlank() }
                                         ?: app.enricher.enrich(s, snapshotItem.domain).also { fresh ->
                                             if (fresh.summary.isNotBlank()) {
-                                                app.session.contexts.value =
-                                                    app.session.contexts.value + (snapshotItem.domain to fresh)
+                                                app.session.contexts.update { it + (snapshotItem.domain to fresh) }
                                             }
                                         }
 
@@ -612,14 +625,17 @@ fun CampaignStudioScreen(
                                         domain = snapshotItem.domain,
                                         email = snapshotItem.email,
                                         onResolvedModel = { probe ->
-                                            s = s.copy(
+                                            val updated = s.copy(
                                                 hcnsModel = probe.selectedModel,
                                                 hcnsReviewModel = probe.reviewModel,
                                                 hcnsAvailableModels = probe.availableModels.joinToString(","),
                                                 hcnsModelVerified = true
                                             )
-                                            app.prefs.save(s)
-                                            activeModelLabel = probe.selectedModel
+                                            app.prefs.save(updated)
+                                            scope.launch(Dispatchers.Main) {
+                                                s = updated
+                                                activeModelLabel = probe.selectedModel
+                                            }
                                         }
                                     )
                                     updateDraft(key, persist = true) {
@@ -648,8 +664,10 @@ fun CampaignStudioScreen(
                                         )
                                     }
                                 } finally {
-                                    done++
-                                    batchProgressText = "پیشرفت تولید: $done از $total"
+                                    val completed = done.incrementAndGet()
+                                    withContext(Dispatchers.Main) {
+                                        batchProgressText = "پیشرفت تولید: $completed از $total"
+                                    }
                                 }
                             }
                         }
@@ -720,7 +738,17 @@ fun CampaignStudioScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { filePicker.launch(arrayOf("text/*", "text/csv", "application/csv")) },
+                        onClick = {
+                            filePicker.launch(
+                                arrayOf(
+                                    "text/*",
+                                    "text/csv",
+                                    "application/csv",
+                                    "application/vnd.ms-excel",
+                                    "text/comma-separated-values"
+                                )
+                            )
+                        },
                         modifier = Modifier.weight(1f)
                     ) {
                         Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -751,7 +779,7 @@ fun CampaignStudioScreen(
                     badge = "الزامی (۱ بار)",
                     badgeColor = OrangeWarn
                 ) {
-                    SubTitle("برای تطبیق ایمیل‌ها با پوشه دامنه و انتخاب جفت معتبر Trial (یک PDF فارسی و یک انگلیسی، هرکدام دقیقاً دو صفحه)، پوشه sitest را یک‌بار انتخاب کنید.")
+                    SubTitle("برای تطبیق خودکار ایمیل‌ها با پوشه سایت‌ها و پیوست ۲ فایل PDF جدیدترین، پوشه sitest در حافظه داخلی گوشی را یک‌بار انتخاب کنید.")
                     BigButton(
                         text = "انتخاب پوشه sitest",
                         icon = Icons.Default.FolderOpen,
@@ -762,7 +790,7 @@ fun CampaignStudioScreen(
                 }
             } else {
                 Section(
-                    header = "تطبیق پوشه و انتخاب جفت Trial دوزبانه",
+                    header = "تطبیق خودکار پوشه و انتخاب ۲ PDF جدیدترین",
                     icon = Icons.Default.FolderOpen,
                     badge = if (matches.isNotEmpty()) "${matches.count { it.readyForApproval }} از ${matches.size} آماده" else "متصل",
                     badgeColor = if (matches.any { it.readyForApproval }) GreenOk else MaterialTheme.colorScheme.primary
@@ -790,7 +818,7 @@ fun CampaignStudioScreen(
 
                     scanError?.let { Chip(it, RedErr) }
                     if (scanning) {
-                        LoadingBox("در حال جستجوی پوشه‌ها و بررسی جفت Trial فارسی/انگلیسی...")
+                        LoadingBox("در حال جستجوی خودکار پوشه‌ها و استخراج ۲ PDF جدیدترین...")
                     } else if (matches.isNotEmpty()) {
                         // Search, status filter & bulk selection controls
                         LabeledField(
@@ -1222,7 +1250,7 @@ private fun DraftReviewCard(
 
             AnimatedVisibility(visible = expanded) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Verified Persian/English two-page trial pair preview (tappable to open in-app PDF viewer)
+                    // Attached 2 newest PDFs preview (tappable to open in-app PDF viewer)
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -1390,7 +1418,7 @@ private fun PdfPreviewDialog(
     LaunchedEffect(uriString, pageIndex) {
         renderingPage = true
         errorText = null
-        withContext(Dispatchers.IO) {
+        val rendered = withContext(Dispatchers.IO) {
             try {
                 if (rendererHolder[0] == null) {
                     val pfd = context.contentResolver.openFileDescriptor(Uri.parse(uriString), "r")
@@ -1399,23 +1427,27 @@ private fun PdfPreviewDialog(
                     rendererHolder[0] = PdfRenderer(pfd)
                 }
                 val r = rendererHolder[0]!!
-                pageCount = r.pageCount
-                val idx = pageIndex.coerceIn(0, maxOf(0, r.pageCount - 1))
-                if (r.pageCount > 0) {
+                val count = r.pageCount
+                val idx = pageIndex.coerceIn(0, maxOf(0, count - 1))
+                val bmp = if (count > 0) {
                     r.openPage(idx).use { page ->
                         val targetScale = minOf(2f, 1600f / page.width.coerceAtLeast(1))
                         val w = (page.width * targetScale).toInt().coerceAtLeast(100)
                         val h = (page.height * targetScale).toInt().coerceAtLeast(100)
-                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                        bmp.eraseColor(android.graphics.Color.WHITE)
-                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                        bitmap = bmp
+                        Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also {
+                            it.eraseColor(android.graphics.Color.WHITE)
+                            page.render(it, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        }
                     }
-                }
+                } else null
+                Triple(count, bmp, null as String?)
             } catch (e: Exception) {
-                errorText = e.message?.take(140) ?: "خطا در نمایش PDF"
+                Triple(pageCount, bitmap, e.message?.take(140) ?: "خطا در نمایش PDF")
             }
         }
+        pageCount = rendered.first
+        bitmap = rendered.second
+        errorText = rendered.third
         renderingPage = false
     }
 
@@ -1608,3 +1640,6 @@ private fun QuickTemplatesDialog(
         }
     )
 }
+
+private fun contactsSignatureForScan(contacts: List<ir.salisec.autosender.data.Contact>): String =
+    contacts.joinToString("|") { it.email }

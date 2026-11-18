@@ -18,7 +18,7 @@ object AttachmentSnapshotReader {
 
     /**
      * Reads a bounded SAF file and validates its actual PDF structure.
-     * Files larger than maxBytes are rejected; the exact limit is permitted.
+     * Files equal to or larger than maxBytes are rejected.
      */
     fun read(
         context: Context,
@@ -40,7 +40,7 @@ object AttachmentSnapshotReader {
                 if (count < 0) break
 
                 total += count
-                if (total > maxBytes) {
+                if (total >= maxBytes) {
                     throw IOException("حجم فایل پیوست به سقف مجاز رسیده یا از آن بیشتر است")
                 }
 
