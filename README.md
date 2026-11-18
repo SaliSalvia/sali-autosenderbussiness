@@ -30,8 +30,8 @@
 > 🗺️ نقشه راه «محصول کلاس جهانی / آماده انتشار»: **[docs/WORLD_CLASS_ROADMAP.md](docs/WORLD_CLASS_ROADMAP.md)**
 > ✅ [چکلیست Go/No-Go](docs/RELEASE_CHECKLIST.md) · [تاریخچه](CHANGELOG.md) · [امنیت](SECURITY.md) · [حریم خصوصی FA/EN](PRIVACY.md) · [مشارکت](CONTRIBUTING.md)
 
-**وضعیت (versionName `2.0.0` / versionCode `3`):** نسخه قابلنصب و سختسازیشده. `compileSdk/targetSdk = 36`،
-بیلد CI شامل تست واحد + lint + R8 release + AAB، صف ارسال idempotent با قفل/lease، لاگ بدون PII،
+**وضعیت (versionName `2.0.1` / versionCode `4`):** نسخه قابلنصب و سختسازیشده. `compileSdk/targetSdk = 36`،
+بیلد CI شامل تست واحد + lint + R8 release + AAB، صف ارسال idempotent با قفل/lease، لاگ بدون PII با نگهداری خودکار ۹۰روزه،
 `allowBackup=false` + `dataExtractionRules`، «پاکسازی کامل دادهها» داخل تنظیمات، و داشبورد کاری با
 **یک دکمه ارسال گروهی** (فقط پیامهای تأییدشده).
 بیلد سبز لازم است، نه کافی؛ بندهای باقیمانده در [چکلیست انتشار](docs/RELEASE_CHECKLIST.md) مشخصاند.
@@ -55,19 +55,23 @@
 `GitHub → Actions → Build SaliBussiness APK` روی `push` به `main` و `arena/**`، **همه PRها به `main`**،
 تگهای `v*` و `workflow_dispatch` اجرا میشود. مراحل:
 
-`clean test lintDebug assembleDebug assembleRelease bundleRelease` (JDK 17، Gradle پینشده `8.11.1`،
+`clean test lintDebug assembleDebug assembleRelease bundleRelease` (JDK 17، Gradle پینشده `8.13`،
 نصب صریح `platforms;android-36` / `build-tools;36.0.0`).
 
-خروجی در artifact **`SaliBussiness-APK`**:
-`SaliBussiness.apk`، `SaliBussiness-debug.apk`، `SaliBussiness.aab` و `SHA256SUMS.txt`.
-روی `main` انتشار خودکار Release با تگ `latest` هم انجام میشود.
+خروجی artifact **`SaliBussiness-APK`**:
+- همیشه: `SaliBussiness-debug.apk` و `SHA256SUMS.txt`.
+- فقط با هر چهار secret امضای تولیدی: `SaliBussiness.apk` و `SaliBussiness.aab` (امضاشده).
+- بدون secretهای امضا: `SaliBussiness-unsigned-release.apk` و `SaliBussiness-unsigned-release.aab`؛ این فایلها فقط برای اعتبارسنجی build هستند و برای نصب/آپلود Play مناسب نیستند.
 
-- بدون سیکرت، APK دیباگ نصبپذیر است و `SaliBussiness.apk` کپی همان بیلد دیباگ است — **هرگز بهعنوان ریلیس امضاشده معرفی نمیشود**.
-- با چهار سیکرت `SALI_KEYSTORE_BASE64`, `SALI_KEYSTORE_PASSWORD`, `SALI_KEY_ALIAS`, `SALI_KEY_PASSWORD`
-  نسخه release امضاشده ساخته میشود.
+GitHub Release با تگ `latest` یا تگ نسخه‌ای `v*` **فقط زمانی منتشر می‌شود که هر چهار secret** `SALI_KEYSTORE_BASE64`, `SALI_KEYSTORE_PASSWORD`, `SALI_KEY_ALIAS`, `SALI_KEY_PASSWORD` به‌طور کامل تنظیم شده باشند. تنظیم ناقص secretها باعث شکست کنترل‌شده CI می‌شود؛ APK دیباگ هرگز با نام Release تولیدی منتشر نمی‌شود.
 - هنگام شکست، artifact `build-logs` حاوی `checks.log` / `build.log` / `release.log` و گزارشهای lint/test آپلود میشود.
 - ابزار ساخت pin شده است (`build.gradle.kts` + `gradle/wrapper/gradle-wrapper.properties`)؛
   ارتقای majorـهای AGP/Gradle/Kotlin باید **هماهنگ** و طی یک PR با بیلد سبز انجام شود، نه تکبهتک توسط Dependabot.
+
+## کنترل تأیید و تازگی شواهد
+- پیش از هر ارسال، بسته شواهد از پوشه انتخاب‌شده دوباره خوانده می‌شود و SHA-256 آن با نسخه زمان تأیید تطبیق داده می‌شود.
+- هویت و ترتیب دو PDF آزمایشی نیز دوباره کنترل می‌شود؛ تغییر گزارش، تغییر جفت پیوست یا از دست‌رفتن مجوز پوشه باعث توقف پیام و نیاز به اسکن/تأیید دوباره می‌شود.
+- ایمیل تست به صندوق فرستنده هم در صورت داشتن پیوست، دقیقاً همان جفت PDF فارسی/انگلیسی دوصفحه‌ای را می‌پذیرد؛ ارسال تست بدون پیوست همچنان ممکن است.
 
 ## ارسال ایمن (چرا تکراری نمیشود)
 - هر پیام یک **UUID پایدار** دارد: `headers.idempotencyKey` در Brevo (TTL ۳۰ دقیقهای) و `Message-ID` قطعی در SMTP.

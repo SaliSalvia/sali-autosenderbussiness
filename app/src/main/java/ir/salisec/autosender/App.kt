@@ -17,6 +17,7 @@ import ir.salisec.autosender.data.MIGRATION_2_3
 import ir.salisec.autosender.data.MIGRATION_3_4
 import ir.salisec.autosender.data.MIGRATION_4_5
 import ir.salisec.autosender.data.MIGRATION_5_6
+import ir.salisec.autosender.data.LogRetentionPolicy
 import ir.salisec.autosender.data.Prefs
 import ir.salisec.autosender.data.StudioDraftEntity
 import ir.salisec.autosender.mail.DeliverabilityChecker
@@ -147,6 +148,11 @@ class App : Application() {
 
         val restored = runBlocking(Dispatchers.IO) { campaignRepository.restore() }
         session.restore(restored.snapshot, restored.drafts.values.toList())
+        appScope.launch {
+            runCatching {
+                db.logDao().deleteBefore(LogRetentionPolicy.cutoff(System.currentTimeMillis()))
+            }
+        }
         persistCampaign()
     }
 

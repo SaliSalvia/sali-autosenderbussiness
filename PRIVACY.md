@@ -1,6 +1,6 @@
 #Privacy Policy / خطمشی حریم خصوصی — SaliBussiness
 
-**آخرین بهروزرسانی / Last updated:** 2026-11-03 · **نسخه اپ / App version:** 2.0.0 (versionCode 3)
+**آخرین بهروزرسانی / Last updated:** 2026-11-18 · **نسخه اپ / App version:** 2.0.1 candidate (versionCode 4)
 
 ---
 
@@ -25,7 +25,7 @@ SaliBussiness یک ابزار **روی دستگاه خود شما** است. **ه
 - **You.com** (`ydc-index.io`) — فقط جستوجوی زمینه عمومی سطح شرکت برای هر دامنه.
 - **سرور IMAP/SMTP خودتان** — خواندن پاسخها / ارسال از طریق SMTP اختصاصی.
 
-هیچ تحلیلگر، تبلیغات، SDK ردیابی، تلمتری یا crash reporter شخص ثالث در اپ وجود ندارد. لاگ ساختاریافتهای خارج از دستگاه ارسال نمیشود.
+هیچ تحلیلگر، تبلیغات، SDK ردیابی، تلمتری یا crash reporter شخص ثالث در اپ وجود ندارد. لاگ ساختاریافتهای خارج از دستگاه ارسال نمیشود. لاگ‌های عملیاتی روی دستگاه حداکثر ۹۰ روز نگهداری می‌شوند و هنگام شروع اپ، داده‌های قدیمی‌تر به‌طور خودکار پاک می‌شوند؛ فایل‌های exportشده خارج از اپ مشمول این پاکسازی نیستند.
 
 ### ۴. آنچه انجام نمیدهیم
 - ❌ هیچ scraping، harvest، حدس آدرس یا غنیسازی داده شخصی انجام نمیشود.
@@ -83,7 +83,7 @@ No analytics, advertising, tracking SDK, telemetry or third-party crash reporter
 - ❌ No Android backup of app data (`allowBackup=false` plus Android 12+ `dataExtractionRules` excluding cloud backup and device transfer), no cleartext traffic.
 
 ### 5. Retention and deletion
-Data lives while the app is installed; we have no cloud retention. To erase everything: **Settings → Privacy and data deletion → Erase all app data** (confirmation dialog; clears the `messages`, `logs` and `campaigns` tables and all encrypted settings), or clear app data / uninstall, delete any log file you exported, and contact Brevo or your mail provider for their own records. An opt-out is recorded immediately, re-checked before every send, and queues for that recipient are marked `SKIPPED`.
+Operational diagnostic logs are retained locally for up to 90 days and older rows are automatically pruned on app startup. Exported log files saved outside the app are not covered by this cleanup. Data lives while the app is installed; we have no cloud retention. To erase everything: **Settings → Privacy and data deletion → Erase all app data** (confirmation dialog; clears the `messages`, `logs` and `campaigns` tables and all encrypted settings), or clear app data / uninstall, delete any log file you exported, and contact Brevo or your mail provider for their own records. An opt-out is recorded immediately, re-checked before every send, and queues for that recipient are marked `SKIPPED`.
 
 ### 6. Your responsibility
 As the sender you must only contact leads with a valid business relationship or consent, comply with applicable law and the provider's Terms of Service, and authenticate your sending domain with SPF / DKIM / DMARC.

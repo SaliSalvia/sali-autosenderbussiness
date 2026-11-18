@@ -1,10 +1,10 @@
 # ✅ چکلیست انتشار (Go / No-Go) — SaliBussiness
 
 **قاعده طلایی:** بیلد سبز «لازم» است، نه «کافی». **هر بند `P0` که تیک نخورده باشد = No-Go**، حتی اگر APK ساخته شده باشد.
-نسخه چکلیست: ۱٫۱ · ۲۰۲۶-۱۱-۰۳ · مرتبط با [`WORLD_CLASS_ROADMAP.md`](WORLD_CLASS_ROADMAP.md) · [`CHANGELOG.md`](../CHANGELOG.md)
+نسخه چکلیست: ۱٫۲ · ۲۰۲۶-۱۱-۱۸ · مرتبط با [`WORLD_CLASS_ROADMAP.md`](WORLD_CLASS_ROADMAP.md) · [`CHANGELOG.md`](../CHANGELOG.md)
 
 > ## 🔴 تصمیم فعلی: **No-Go برای انتشار عمومی / Play**
-> فاز ۰ و بخش بزرگی از فاز ۱–۴ اجرا شده (بیلد سبز، تست واحد، idempotency، lease، migration،
+> Candidate سخت‌سازی `2.0.1`؛ فاز ۰ و بخش بزرگی از فاز ۱–۴ اجرا شده (بیلد سبز، تست واحد، idempotency، lease، migration،
 > API 36، بکاپ/شبکه، R8، PRIVACY/SECURITY، AAB در CI)، ولی بندهای P0 زیر همچنان بازاند:
 > Golden Set واقعی، وبحوک bounce/complaint، تأیید SPF/DKIM/DMARC، رضایت مستند بهازای هر مخاطب،
 > Play App Signing، انتشار مرحلهای و تست دستگاه Android 16. «حذف همه دادهها» داخل اپ اکنون پیادهسازی شده است.
@@ -19,6 +19,8 @@
 - [x] منطق idempotency (UUID پایدار، `duplicate_parameter` = موفقیت، `UNCERTAIN` بدون retry) — تست واحد `MessageStateTest`
 - [ ] تست شبیهسازی شبکه قابل اطمینان (timeout → دقیقاً ۰ ارسال تکراری) با FakeBrevo/MockWebServer
 - [x] فقط ۲ فایل trial دوصفحهای (`_fa` + انگلیسی)؛ `%PDF`، `pages==2` و نامها روی بایتهای واقعی (`AttachmentGuard`)
+- [x] تازگی Evidence Pack در لحظه ارسال دوباره محاسبه و با هش زمان تأیید مقایسه می‌شود؛ هویت و ترتیب پیوست‌ها نیز دوباره تطبیق داده می‌شوند (`EvidenceApprovalGuard` + تست واحد)
+- [x] ایمیل تست به صندوق فرستنده در صورت داشتن پیوست، همان سیاست Trial دوصفحه‌ای و محدودیت اندازه را اجرا می‌کند
 - [x] حجم هر پیوست ≤ ۴MB و مجموع ≤ ۲۰MB (محدودیت مستند Brevo)
 - [x] `QualityGate` بعد از ویرایش دستی هم اجرا میشود؛ دکمه تأیید تا عبور گیت غیرفعال است
 - [x] خط opt-out و `Re:/Fwd:` جعلی/فوریت ساختگی توسط `QualityGate` مسدودند (تست واحد)
@@ -40,7 +42,7 @@
 - [x] [`PRIVACY.md`](../PRIVACY.md) (FA/EN) منتشر شد؛ موجودی داده و طرفهای سوم (hcnsec/You.com/Brevo/IMAP) درج شد
 - [x] [`SECURITY.md`](../SECURITY.md) و مسیر گزارش خصوصی موجود است
 - [x] «پاکسازی کامل دادههای اپ» داخل تنظیمات با دیالوگ تأیید: `messages` + `logs` + `campaigns` + prefs رمزنگاریشده + session پاک میشوند (`SettingsScreen` / `App.clearAllData`)
-- [ ] خطمشی نگهداری لاگ (حذف خودکار لاگهای قدیمیتر از N روز) هنوز اعمال نشده؛ حذف فایلهای exportشده بر عهده کاربر است
+- [x] نگهداری لاگ عملیاتی روی دستگاه حداکثر ۹۰ روز است؛ هنگام شروع اپ، رکوردهای قدیمی‌تر به‌صورت خودکار حذف می‌شوند (`LogRetentionPolicy`, `LogDao.deleteBefore`)؛ فایل‌های exportشده‌ای که کاربر خارج از اپ ذخیره کرده باید جداگانه حذف شوند
 - [ ] رضایت/رابطه تجاری بهازای هر مخاطب ثبت میشود؛ فرم Data Safety تکمیل شده
 - [ ] SPF / DKIM / DMARC دامنه فرستنده تأیید و تست شدهاند
 
@@ -49,7 +51,7 @@
 - [x] تست واحد منطق دامنه: ContactsParser / DomainValidator / QualityGate / AttachmentPolicy / AttachmentGuard / MessageState / PrivacyRedactor / GoldenSet
 - [ ] پوشش تست ≥ ۷۰٪ اندازهگیری شود؛ `detekt`/`ktlint` اضافه شود
 - [ ] `libs.versions.toml`؛ `kapt` → KSP؛ `security-crypto` پایدار
-- [x] `versionCode = 3` / `versionName = 2.0.0` و `CHANGELOG.md` همخواناند
+- [x] `versionCode = 4` / `versionName = 2.0.1` و `CHANGELOG.md` همخواناند
 - [x] `isMinifyEnabled=true` + `isShrinkResources=true` و قواعد R8 در بیلد release CI تأیید میشوند
 - [x] Migration واقعی `MIGRATION_2_3` اضافه شد (fallback فقط برای نصبهای pre-v2 توسعهدهنده)
 - [ ] `MigrationTestHelper` و SBOM / بررسی CVE

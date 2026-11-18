@@ -195,6 +195,10 @@ interface LogDao {
 
     @Insert suspend fun insert(l: LogEntity)
 
+    /** Deletes operational log rows older than the retention cutoff. */
+    @Query("DELETE FROM logs WHERE ts < :cutoff")
+    suspend fun deleteBefore(cutoff: Long): Int
+
     @Query("DELETE FROM logs") suspend fun clearAll()
 }
 

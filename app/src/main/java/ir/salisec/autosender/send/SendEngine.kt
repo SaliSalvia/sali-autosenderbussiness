@@ -2,6 +2,7 @@ package ir.salisec.autosender.send
 
 import android.content.Context
 import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
@@ -11,6 +12,8 @@ import ir.salisec.autosender.data.AppDatabase
 import ir.salisec.autosender.data.AttachmentGuard
 import ir.salisec.autosender.data.AttachmentPolicy
 import ir.salisec.autosender.data.AttachmentSnapshotReader
+import ir.salisec.autosender.data.EvidenceApprovalGuard
+import ir.salisec.autosender.data.ReportReader
 import ir.salisec.autosender.data.LogEntity
 import ir.salisec.autosender.data.LogEntry
 import ir.salisec.autosender.data.MessageEntity
@@ -169,7 +172,7 @@ class SendEngine(
         WorkManager.getInstance(appContext).enqueueUniqueWork(UNIQUE_WORK_NAME, ExistingWorkPolicy.REPLACE, req)
     }
 
-    /** Sends a preview copy of a draft (plus up to 2 PDF attachments) to the user's OWN email. */
+    /** Sends a preview to the configured sender mailbox; optional attachments must be the verified trial pair. */
     suspend fun sendTestToSelf(
         subject: String,
         preheader: String,
@@ -187,10 +190,30 @@ class SendEngine(
             settings.maxAttachmentMb.coerceIn(1, 4) * 1024L * 1024L
         )
         try {
-            val attachments = attachmentUris.mapIndexed { i, uri ->
-                val bytes = readBounded(appContext, uri, perFileCap)
-                val name = attachmentNames.getOrNull(i) ?: AttachmentPolicy.displayName(uri)
-                name to bytes
+            val attachments = if (attachmentUris.isEmpty()) {
+                if (attachmentNames.isNotEmpty()) {
+                    throw IllegalArgumentException("نام پیوست بدون فایل انتخاب‌شده معتبر نیست")
+                }
+                emptyList()
+            } else {
+                if (attachmentUris.size != 2) {
+                    throw IllegalArgumentException("برای ایمیل تست فقط جفت کامل PDF آزمایشی فارسی و انگلیسی مجاز است")
+                }
+                val names = attachmentNames.takeIf { it.size == attachmentUris.size }
+                    ?: attachmentUris.map { AttachmentPolicy.displayName(it) }
+                AttachmentGuard.validateNames(names)?.let { throw IllegalArgumentException(it) }
+                val payloads = attachmentUris.map { uri -> readBounded(appContext, uri, perFileCap) }
+                val snapshots = payloads.map { bytes -> AttachmentSnapshotReader.inspect(bytes) }
+                val validation = AttachmentGuard.validateFiles(
+                    names = names,
+                    approvedPages = snapshots.map { it.pages },
+                    approvedSha256 = snapshots.map { it.sha256 },
+                    actualPages = snapshots.map { it.pages },
+                    payloads = payloads,
+                    perFileCapMb = settings.maxAttachmentMb
+                )
+                validation?.let { throw IllegalArgumentException(it) }
+                names.zip(payloads)
             }
             val msg = OutgoingMessage(
                 to = settings.fromEmail.trim(),
@@ -328,6 +351,15 @@ class SendEngine(
                 skipped++
                 _state.value = _state.value.copy(skipped = skipped)
                 log(msg, false, "رد شد: $nameProblem")
+                continue
+            }
+
+            val evidenceProblem = validateCurrentEvidence(msg, paths, names, settings)
+            if (evidenceProblem != null) {
+                settle(msg, MessageState.SKIPPED, evidenceProblem)
+                skipped++
+                _state.value = _state.value.copy(skipped = skipped)
+                log(msg, false, "رد شد: اعتبار شواهد پس از تأیید تغییر کرده است")
                 continue
             }
 
@@ -476,6 +508,52 @@ class SendEngine(
             _state.value = _state.value.copy(running = false, currentDomain = null, waitingUntil = null, waitingForBusinessHours = false)
         }
         outcome
+    }
+
+    /**
+     * Rebuilds the evidence pack from the currently granted sitest tree immediately
+     * before sending. A message is skipped if the source folder, report content,
+     * or selected bilingual trial attachment pair no longer matches approval.
+     */
+    private suspend fun validateCurrentEvidence(
+        message: MessageEntity,
+        approvedUris: List<String>,
+        approvedNames: List<String>,
+        settings: Settings
+    ): String? = withContext(Dispatchers.IO) {
+        val treeUri = settings.sitestFolderUri.trim()
+        if (treeUri.isBlank()) {
+            return@withContext "پوشه گزارش‌ها پس از تأیید در دسترس نیست؛ کمپین را دوباره اسکن و تأیید کنید"
+        }
+        val root = try {
+            DocumentFile.fromTreeUri(appContext, Uri.parse(treeUri))
+        } catch (_: Exception) {
+            null
+        }
+        if (root == null || !root.isDirectory || !root.canRead()) {
+            return@withContext "دسترسی پوشه گزارش‌ها معتبر نیست؛ پوشه را دوباره انتخاب و کمپین را تأیید کنید"
+        }
+        val folder = try {
+            ReportReader.findFolder(root, message.domain, message.email)
+        } catch (_: Exception) {
+            null
+        } ?: return@withContext "پوشه گزارش دامنه پیدا نشد؛ کمپین را دوباره اسکن و تأیید کنید"
+
+        val currentBundle = try {
+            // Deliberately bypass PDF cache: approval must be checked against current source files.
+            ReportReader.readBundle(appContext, message.domain, folder, pdfCacheDao = null)
+        } catch (_: Exception) {
+            return@withContext "خواندن دوباره شواهد گزارش ناموفق بود؛ کمپین را دوباره اسکن و تأیید کنید"
+        }
+        val currentPair = currentBundle.trialAttachments
+        EvidenceApprovalGuard.validate(
+            approvedFingerprint = message.evidenceHash,
+            currentFingerprint = currentBundle.fingerprint(),
+            approvedAttachmentUris = approvedUris,
+            currentAttachmentUris = currentPair.map { it.uri },
+            approvedAttachmentNames = approvedNames,
+            currentAttachmentNames = currentPair.map { it.name }
+        )
     }
 
     private fun computeNextFollowUpAt(msg: MessageEntity, s: Settings, sentNow: Long): Long? {
