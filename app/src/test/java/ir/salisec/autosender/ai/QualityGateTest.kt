@@ -41,6 +41,17 @@ class QualityGateTest {
         assertFalse(a.contains("2")); assertFalse(a.contains("7")); assertFalse(a.contains("5"))
     }
 
+    @Test fun numericDomainIsNotTreatedAsSecurityEvidenceButRemainsUsableAsIdentifier() {
+        val numericDomain = ReportBundle(domain = "example123.com")
+        assertFalse(QualityGate.allowedNumbers(numericDomain).contains("123"))
+        val draft = valid().copy(subject = "گزارش امنیتی دامنه example123.com")
+        val report = QualityGate.validate(
+            draft, settings, emptySet(),
+            nonClaimIdentifiers = setOf("example123.com")
+        )
+        assertTrue(report.blockers.toString(), report.passed)
+    }
+
     @Test fun missingEvidenceDoesNotReceiveUniversalNumberAllowlist() {
         assertTrue(QualityGate.allowedNumbers(null).isEmpty())
         val noNumericEvidence = ReportBundle(
