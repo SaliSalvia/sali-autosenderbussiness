@@ -128,6 +128,23 @@ class AttachmentGuardTest {
     }
 
     @Test
+    fun allowsFileExactlyAtConfiguredFourMegabyteLimit() {
+        val exactLimit = ByteArray(AttachmentGuard.MAX_PER_FILE_BYTES.toInt())
+        "%PDF-1.4".toByteArray().copyInto(exactLimit)
+        val payloads = listOf(exactLimit, pdf())
+        assertNull(
+            AttachmentGuard.validateFiles(
+                names,
+                listOf(2, 2),
+                payloads.map { sha256(it) },
+                listOf(2, 2),
+                payloads,
+                4
+            )
+        )
+    }
+
+    @Test
     fun capsAreTheDocumentedConservativeOnes() {
         assertEquals(4L * 1024 * 1024, AttachmentGuard.MAX_PER_FILE_BYTES)
         assertEquals(20L * 1024 * 1024, AttachmentGuard.MAX_TOTAL_BYTES)
