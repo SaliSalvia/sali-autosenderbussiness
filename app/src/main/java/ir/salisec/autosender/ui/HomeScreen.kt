@@ -233,7 +233,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
         Section(header = stringResource(R.string.home_workspace), icon = Icons.Default.FolderOpen) {
             HomeCard(
                 title = "کمپین سریع و تطبیق خودکار sitest",
-                subtitle = "ورود سطری ایمیل‌ها، انتخاب ۲ PDF جدیدترین، سرچ You.com و طراحی با ۴ الگو",
+                subtitle = "ورود سطری ایمیل‌ها، تطبیق گزارش‌ها و انتخاب جفت Trial دوزبانه، سرچ You.com و طراحی با ۴ الگو",
                 icon = Icons.Default.AutoAwesome,
                 accent = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.testTag("home_card_campaign")
