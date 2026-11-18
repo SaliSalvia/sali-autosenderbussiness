@@ -60,6 +60,26 @@ object MessageState {
 }
 
 
+/**
+ * Linearizes cancellation against the decision to begin an external provider request.
+ * A cancellation before tryBeginProviderCall() prevents the request; cancellation after
+ * it means the request may be in flight and must be settled as UNCERTAIN if interrupted.
+ */
+class ProviderStartGate {
+    private val lock = Any()
+
+    @Volatile
+    private var cancellationRequested = false
+
+    fun reset() = synchronized(lock) { cancellationRequested = false }
+
+    fun cancel() = synchronized(lock) { cancellationRequested = true }
+
+    fun isCancellationRequested(): Boolean = cancellationRequested
+
+    fun tryBeginProviderCall(): Boolean = synchronized(lock) { !cancellationRequested }
+}
+
 /** Final, fail-closed check immediately before handing a message to the mail provider. */
 object SendPreflightGuard {
     /**
