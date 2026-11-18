@@ -83,6 +83,32 @@ class MessageStateTest {
 
 
     @Test
+    fun cancellationBeforeProviderStartPreventsExternalRequest() {
+        val gate = ProviderStartGate()
+        gate.cancel()
+        assertTrue(gate.isCancellationRequested())
+        assertFalse(gate.tryBeginProviderCall())
+    }
+
+    @Test
+    fun cancellationAfterProviderStartDoesNotPretendRequestNeverStarted() {
+        val gate = ProviderStartGate()
+        assertTrue(gate.tryBeginProviderCall())
+        gate.cancel()
+        assertTrue(gate.isCancellationRequested())
+        assertFalse(gate.tryBeginProviderCall())
+    }
+
+    @Test
+    fun resetAllowsANewQueueRunToStart() {
+        val gate = ProviderStartGate()
+        gate.cancel()
+        gate.reset()
+        assertFalse(gate.isCancellationRequested())
+        assertTrue(gate.tryBeginProviderCall())
+    }
+
+    @Test
     fun approvalSnapshotRejectsAnySendRelevantEditDuringPreparation() {
         val approved = MessageEntity(
             domain = "example.com",
