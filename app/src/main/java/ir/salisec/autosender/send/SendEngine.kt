@@ -234,7 +234,7 @@ class SendEngine(
 
     fun start() {
         if (job?.isActive == true) return
-        cancelRequested = false
+        providerStartGate.reset()
         job = scope.launch {
             runQueue()
         }
@@ -575,7 +575,7 @@ class SendEngine(
                     if (_state.value.paused) {
                         _state.value = _state.value.copy(waitingUntil = null)
                         waitWhilePaused()
-                        if (cancelRequested) break
+                        if (providerStartGate.isCancellationRequested()) break
                     }
                     delay(1000)
                     waited += 1000
