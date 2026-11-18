@@ -55,8 +55,8 @@ CI این کاندید پس از بازبینی باید تست، lint، APK و 
 
 ### Added — ایمنی ارسال و پایداری
 - `MessageState` (DRAFT → APPROVED → QUEUED → SENDING → SENT/FAILED/SKIPPED/**UNCERTAIN**) و **claim/lease اتمی** در Room: فقط ردیفهای `APPROVED/QUEUED` قابل تصاحباند و اجرای کشتهشده پیام `SENDING` را رها نمیکند.
-- **idempotency UUID پایدار** بهازای هر پیام: `headers.idempotencyKey` در Brevo (پاسخ `duplicate_parameter` = موفقیت، نه retry) و `Message-ID` قطعی در SMTP.
-- نتیجه **گمشده** (timeout/5xx/قطع شبکه) دیگر هرگز بهصورت خودکار retry نمیشود → وضعیت `UNCERTAIN` و تصمیم انسان.
+- UUID پایدار هر پیام برای `headers.idempotencyKey` در Brevo؛ پاسخ دقیق `400 + code=duplicate_parameter` از پردازش مجدد همان کلید جلوگیری می‌کند. در SMTP، `Message-ID` فقط برای threading/traceability است و deduplication را تضمین نمی‌کند.
+- نتیجه مبهم (HTTP 408/5xx، قطع شبکه، یا هر خطا پس از آغاز `SMTP sendMessage`) به `UNCERTAIN` می‌رود و خودکار retry نمی‌شود.
 - `AttachmentGuard`: بررسی **بایتهای واقعی** پیش از network call — امضای `%PDF-`، دقیقاً ۲ نسخه trial (فا + en)، `pages == 2`، ≤ ۴MB/فایل و ≤ ۲۰MB کل (مستند محافظهکارانه Brevo). خواندن جریانی با سقف سخت بهجای `readBytes()` بینهایت.
 - `PrivacyRedactor`: ماسک ایمیل در لاگ/UI/خروجی لاگ، حذف کلیدها و ایمیلها از پیامهای خطا و `lastError`.
 - ویرایش متن **پس از تأیید**، approval را باطل و ردیف صف را `DRAFT` میکند (هیچ نسخه تأییدنشدهای ارسال نمیشود).
