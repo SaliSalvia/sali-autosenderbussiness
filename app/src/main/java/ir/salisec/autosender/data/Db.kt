@@ -34,7 +34,7 @@ data class MessageEntity(
     val evidenceHash: String = "",
     /** Result of the local grounding / compliance gate. */
     val qualityOk: Boolean = false,
-    /** Stable idempotency key (UUID). Never regenerated on retry. */
+    /** Stable per-message UUID. Brevo uses it as an idempotency key; SMTP derives a Message-ID only. */
     val messageUuid: String? = null,
     /** Links the message to a persisted campaign draft. */
     val campaignId: String? = null,
