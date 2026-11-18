@@ -691,8 +691,14 @@ class SendEngine(
     fun resume() { _state.value = _state.value.copy(paused = false) }
     fun cancel() {
         providerStartGate.cancel()
+        val activeRun = _state.value.running
         _state.value = _state.value.copy(paused = false, waitingForBusinessHours = false, waitingUntil = null)
-        WorkManager.getInstance(appContext).cancelUniqueWork(UNIQUE_WORK_NAME)
+        // Let an active provider call finish or report an ambiguous result. Cancelling the
+        // WorkManager coroutine here could interrupt SMTP/HTTP after acceptance and lose its response.
+        // A scheduled-but-not-running request can still be removed immediately.
+        if (!activeRun) {
+            WorkManager.getInstance(appContext).cancelUniqueWork(UNIQUE_WORK_NAME)
+        }
     }
 
     private suspend fun log(msg: MessageEntity, ok: Boolean, text: String) {
