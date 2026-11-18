@@ -74,8 +74,10 @@ class QualityGateTest {
         val supported = QualityGate.validate(ratio, settings, allowed(), scoreValue = "62")
         assertTrue(supported.blockers.toString(), supported.passed)
 
-        val unsupported = QualityGate.validate(ratio, settings, noScoreAllowed)
+        val unsupported = QualityGate.validate(ratio, settings, allowed())
         assertFalse(unsupported.passed)
+        val mismatchedScore = QualityGate.validate(ratio, settings, allowed(), scoreValue = "61")
+        assertFalse(mismatchedScore.passed)
 
         val inventedHundred = valid().copy(
             body = valid().body + " امتیاز امنیتی شما 62 از 100 است. همچنین ما 100 مشتری فعال داریم."
