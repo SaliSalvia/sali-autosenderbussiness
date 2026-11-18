@@ -56,7 +56,6 @@ class BrevoSender(private val client: OkHttpClient) : MailSender {
             headersObj.put("idempotencyKey", msg.idempotencyKey)
         }
         headersObj.put("List-Unsubscribe", "<mailto:$replyAddr?subject=unsubscribe>")
-        headersObj.put("List-Unsubscribe-Post", "List-Unsubscribe=One-Click")
         msg.inReplyToMessageId?.takeIf { it.isNotBlank() }?.let { rawId ->
             val cleanId = normalizeMessageId(rawId)
             val refs = msg.references?.takeIf { r -> r.isNotBlank() }?.let { normalizeReferences(it) } ?: cleanId
@@ -157,7 +156,6 @@ class SmtpSender : MailSender {
             mm.setHeader("Message-ID", rfcMsgId)
         }
         mm.setHeader("List-Unsubscribe", "<mailto:$replyAddr?subject=unsubscribe>")
-        mm.setHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click")
         msg.inReplyToMessageId?.takeIf { it.isNotBlank() }?.let { rawId ->
             val cleanId = normalizeMessageId(rawId)
             val refs = msg.references?.takeIf { r -> r.isNotBlank() }?.let { normalizeReferences(it) } ?: cleanId
@@ -207,6 +205,7 @@ class SmtpSender : MailSender {
             try {
                 if (transport.isConnected) transport.close()
             } catch (_: Exception) {
+                // Preserve the original send/transport exception.
             }
         }
     }
@@ -232,10 +231,12 @@ fun buildHtmlEmail(msg: OutgoingMessage): String {
             escapeHtml(msg.preheader) + "</div>"
     val rawBody = msg.textBody.ifBlank { msg.htmlBody }.trim()
     val blocks = rawBody.split(Regex("""\n{2,}"""))
-    val renderedBlocks = blocks.mapIndexed { idx, block ->
+    val renderedBlocks = blocks.mapIndexed { index, block ->
         val trimmed = block.trim()
         val safe = escapeHtml(trimmed).replace("\n", "<br>")
-        val isTail = idx >= (blocks.size - 2).coerceAtLeast(0)
+        // Only the last two paragraphs can be an unsubscribe/footer area.
+        // Keywords or URLs in the main message body must not down-style it.
+        val isTail = index >= (blocks.size - 2).coerceAtLeast(0)
         val isFooter = isTail && (
             trimmed.contains("واژه «حذف»") ||
                 trimmed.contains("با حذف پاسخ") ||

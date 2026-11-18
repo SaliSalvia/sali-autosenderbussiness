@@ -210,7 +210,7 @@ class DeliverabilityChecker(private val client: OkHttpClient) {
                         title = "سقف پیوست‌های صف ارسال",
                         severity = CheckSeverity.FAIL,
                         detail = "$overTwo پیام بیش از ۲ فایل پیوست دارد.",
-                        remediation = "سیاست ارسال فقط حداکثر ۲ فایل PDF جدیدترین (زیر ۴MB) را مجاز می‌داند."
+                        remediation = "سیاست ارسال فقط یک جفت Trial فارسی/انگلیسی، هر فایل دقیقاً ۲ صفحه و حداکثر ۴MB را مجاز می‌داند."
                     )
                 )
                 badSubjects > 0 -> items.add(

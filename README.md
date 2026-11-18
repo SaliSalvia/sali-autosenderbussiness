@@ -30,8 +30,8 @@
 > 🗺️ نقشه راه «محصول کلاس جهانی / آماده انتشار»: **[docs/WORLD_CLASS_ROADMAP.md](docs/WORLD_CLASS_ROADMAP.md)**
 > ✅ [چکلیست Go/No-Go](docs/RELEASE_CHECKLIST.md) · [تاریخچه](CHANGELOG.md) · [امنیت](SECURITY.md) · [حریم خصوصی FA/EN](PRIVACY.md) · [مشارکت](CONTRIBUTING.md)
 
-**وضعیت (versionName `2.0.0` / versionCode `3`):** نسخه قابلنصب و سختسازیشده. `compileSdk/targetSdk = 36`،
-بیلد CI شامل تست واحد + lint + R8 release + AAB، صف ارسال idempotent با قفل/lease، لاگ بدون PII،
+**وضعیت کاندید (versionName `2.0.3` / versionCode `6`):** اصلاحات hardening نهایی در PR مستقل هستند و باید CI تست، lint، APK و AAB آن را تأیید کند؛ نصب و آزمون روی دستگاه واقعی Android 16 هنوز انجام نشده است. `compileSdk/targetSdk = 36`،
+بیلد CI شامل تست واحد + lint + R8 release + AAB، صف ارسال idempotent با قفل/lease، لاگ بدون PII با نگهداری خودکار ۹۰روزه،
 `allowBackup=false` + `dataExtractionRules`، «پاکسازی کامل دادهها» داخل تنظیمات، و داشبورد کاری با
 **یک دکمه ارسال گروهی** (فقط پیامهای تأییدشده).
 بیلد سبز لازم است، نه کافی؛ بندهای باقیمانده در [چکلیست انتشار](docs/RELEASE_CHECKLIST.md) مشخصاند.
@@ -45,8 +45,8 @@
 - Brevo API (پیشفرض) یا SMTP اختصاصی؛ IMAP داخل اپ برای پاسخها؛ درخواست حذف بلافاصله ثبت میشود.
 
 ## قانون طلایی PDFها
-- **AI تمام PDFهای پوشه هر دامنه را میخواند** تا پیام را طراحی کند.
-- **فقط و فقط دو نسخه trial دوصفحهای (فارسی + انگلیسی) پیوست و ارسال میشوند**.
+- **حداکثر ۶ PDF از هر پوشه** برای تحلیل خوانده میشود؛ اگر جفت trial معتبر قدیمی‌تر باشد، پیش از اعمال سقف در اولویت پردازش قرار میگیرد.
+- **فقط و فقط یک جفت trial دوصفحه‌ای هم‌خانواده (فارسی + انگلیسی)** پس از تأیید خوانایی و تعداد صفحات پیوست و ارسال میشود؛ در نبود جفت معتبر، هیچ PDFای ارسال نمیشود.
 - پیش از هر network call، `AttachmentGuard` امضای `%PDF-`، تعداد صفحات (`2`)، نام trial،
   ≤ ۴MB برای هر فایل و ≤ ۲۰MB برای کل ایمیل را روی **بایتهای واقعی** چک میکند.
 - نامگذاری پیشنهادی: `..._trial_fa.pdf` و `..._trial.pdf`؛ گزارش کامل `..._full.pdf` هرگز پیوست نمیشود.
@@ -55,19 +55,23 @@
 `GitHub → Actions → Build SaliBussiness APK` روی `push` به `main` و `arena/**`، **همه PRها به `main`**،
 تگهای `v*` و `workflow_dispatch` اجرا میشود. مراحل:
 
-`clean test lintDebug assembleDebug assembleRelease bundleRelease` (JDK 17، Gradle پینشده `8.11.1`،
+`clean test lintDebug assembleDebug assembleRelease bundleRelease` (JDK 17، Gradle پینشده `8.13`،
 نصب صریح `platforms;android-36` / `build-tools;36.0.0`).
 
-خروجی در artifact **`SaliBussiness-APK`**:
-`SaliBussiness.apk`، `SaliBussiness-debug.apk`، `SaliBussiness.aab` و `SHA256SUMS.txt`.
-روی `main` انتشار خودکار Release با تگ `latest` هم انجام میشود.
+خروجی artifact **`SaliBussiness-APK`**:
+- همیشه: `SaliBussiness-debug.apk` و `SHA256SUMS.txt`.
+- فقط با هر چهار secret امضای تولیدی: `SaliBussiness.apk` و `SaliBussiness.aab` (امضاشده).
+- بدون secretهای امضا: `SaliBussiness-unsigned-release.apk` و `SaliBussiness-unsigned-release.aab`؛ این فایلها فقط برای اعتبارسنجی build هستند و برای نصب/آپلود Play مناسب نیستند.
 
-- بدون سیکرت، APK دیباگ نصبپذیر است و `SaliBussiness.apk` کپی همان بیلد دیباگ است — **هرگز بهعنوان ریلیس امضاشده معرفی نمیشود**.
-- با چهار سیکرت `SALI_KEYSTORE_BASE64`, `SALI_KEYSTORE_PASSWORD`, `SALI_KEY_ALIAS`, `SALI_KEY_PASSWORD`
-  نسخه release امضاشده ساخته میشود.
+**قانون انتشار نسخه‌ای:** روی `main`، PR و `workflow_dispatch` فقط CI و Artifactهای Actions ساخته می‌شوند؛ این اجراها Release ایجاد یا تگ `latest` را جابه‌جا نمی‌کنند. توجه: Release تاریخی `v2.0.2` فعلاً asset ندارد و `latest` قدیمی شامل APK دیباگ از pipeline قبلی است؛ برای دریافت نسخه قابل توزیع، تا انتشار تگ نسخه‌ای جدید و تأیید assetها به این دو Release تکیه نکن. انتشار GitHub Release فقط با push تگ تغییرناپذیر `vX.Y.Z` انجام می‌شود و workflow بررسی می‌کند که بخش نسخه تگ دقیقاً با `versionName` در `app/build.gradle.kts` برابر باشد. هر چهار secret امضای تولیدی برای تگ نسخه‌ای الزامی‌اند؛ در نبود یا ناقص بودن آن‌ها انتشار fail می‌شود. Release نسخه‌ای شامل APK و AAB امضاشده و `SHA256SUMS.txt` است؛ APK دیباگ فقط در Artifactهای CI می‌ماند. GitHub بر اساس `make_latest: true` آخرین Release نسخه‌ای را به‌عنوان Latest علامت می‌زند. تگ قدیمی `latest` صرفاً تاریخی است و نباید برای انتشار نسخه جدید استفاده شود. روند کامل: [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md).
 - هنگام شکست، artifact `build-logs` حاوی `checks.log` / `build.log` / `release.log` و گزارشهای lint/test آپلود میشود.
 - ابزار ساخت pin شده است (`build.gradle.kts` + `gradle/wrapper/gradle-wrapper.properties`)؛
   ارتقای majorـهای AGP/Gradle/Kotlin باید **هماهنگ** و طی یک PR با بیلد سبز انجام شود، نه تکبهتک توسط Dependabot.
+
+## کنترل تأیید و تازگی شواهد
+- پیش از هر ارسال، بسته شواهد از پوشه انتخاب‌شده دوباره خوانده می‌شود و SHA-256 آن با نسخه زمان تأیید تطبیق داده می‌شود.
+- هویت و ترتیب دو PDF آزمایشی نیز دوباره کنترل می‌شود؛ تغییر گزارش، تغییر جفت پیوست یا از دست‌رفتن مجوز پوشه باعث توقف پیام و نیاز به اسکن/تأیید دوباره می‌شود.
+- ایمیل تست به صندوق فرستنده هم در صورت داشتن پیوست، دقیقاً همان جفت PDF فارسی/انگلیسی دوصفحه‌ای را می‌پذیرد؛ ارسال تست بدون پیوست همچنان ممکن است.
 
 ## ارسال ایمن (چرا تکراری نمیشود)
 - هر پیام یک **UUID پایدار** دارد: `headers.idempotencyKey` در Brevo (TTL ۳۰ دقیقهای) و `Message-ID` قطعی در SMTP.
@@ -86,3 +90,8 @@
 ## نکته حقوقی
 ارسال فقط به سرنخهایی که رابطه تجاری / رضایت دارند؛ دامنه فرستنده باید SPF/DKIM/DMARC داشته باشد؛
 unsubscribe در پاسخ فورا در فهرست عدم ارسال ثبت میشود. جزئیات: [`PRIVACY.md`](PRIVACY.md).
+
+
+## Engineering hardening
+
+The current phase 1–2 hardening work, including strict bilingual trial-PDF attachment validation, full evidence SHA-256, campaign persistence repository, regression tests, and CI coverage reporting, is tracked in [docs/PHASE_1_2_EXECUTION.md](docs/PHASE_1_2_EXECUTION.md).

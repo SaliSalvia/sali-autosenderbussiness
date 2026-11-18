@@ -113,8 +113,14 @@ class Prefs(context: Context) {
             } catch (_: Exception) { }
             try {
                 buildEncrypted()
-            } catch (_: Exception) {
-                context.getSharedPreferences("sali_secure_prefs_fallback", Context.MODE_PRIVATE)
+            } catch (recoveryError: Exception) {
+                // Never fall back to plain SharedPreferences: this store contains API
+                // keys and SMTP/IMAP credentials. Fail closed instead of persisting secrets
+                // without encryption. The user can clear/reconfigure app data explicitly.
+                throw IllegalStateException(
+                    "Encrypted preferences could not be initialized; refusing unencrypted storage",
+                    recoveryError
+                )
             }
         }
     }

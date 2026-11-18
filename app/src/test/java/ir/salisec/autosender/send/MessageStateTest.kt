@@ -51,4 +51,33 @@ class MessageStateTest {
         assertTrue(MessageState.isAmbiguous(null))
         assertFalse(MessageState.isAmbiguous("Brevo 400: invalid_parameter"))
     }
+
+
+    @Test
+    fun sendPreflightFailsClosedWhenCancelledSuppressedOrApprovalChanged() {
+        fun allowed(
+            cancel: Boolean = false,
+            suppressed: Boolean = false,
+            approved: Boolean = true,
+            status: String? = MessageState.SENDING,
+            owner: String? = "send-engine"
+        ) = SendPreflightGuard.canSubmit(
+            cancelRequested = cancel,
+            isSuppressed = suppressed,
+            approvalStillCurrent = approved,
+            status = status,
+            leaseOwner = owner,
+            expectedLeaseOwner = "send-engine"
+        )
+
+        assertTrue(allowed())
+        assertFalse(allowed(cancel = true))
+        assertFalse(allowed(suppressed = true))
+        assertFalse(allowed(approved = false))
+        assertFalse(allowed(status = MessageState.DRAFT))
+        assertFalse(allowed(status = MessageState.UNCERTAIN))
+        assertFalse(allowed(owner = "another-worker"))
+        assertFalse(allowed(owner = null))
+    }
+
 }
