@@ -1,6 +1,6 @@
 # Protecting `main`
 
-The repository connection used for code changes can read and push repository contents, but does not expose GitHub's branch-protection/ruleset write API. Apply this once in the repository owner UI:
+The `main` branch currently has no protection rule. A repository maintainer must apply the following settings once in GitHub:
 
 1. Open **Settings → Rules → Rulesets** (or **Settings → Branches → Add branch protection rule**).
 2. Target the branch pattern `main`.
