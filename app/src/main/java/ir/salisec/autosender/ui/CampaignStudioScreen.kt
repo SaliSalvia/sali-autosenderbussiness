@@ -284,7 +284,7 @@ fun CampaignStudioScreen(
                 app.session.selected.value = if (preserved.isNotEmpty()) preserved else readyKeys
                 val completedScanFingerprint = withContext(Dispatchers.IO) {
                     val latestRoot = DocumentFile.fromTreeUri(context, Uri.parse(sitestUri))
-                    latestRoot?.let { folderScanFingerprint(it, contactsSignature, sitestUri) }.orEmpty()
+                    latestRoot?.let { folderScanFingerprint(it, contactsSignatureForScan(contacts), sitestUri) }.orEmpty()
                 }
                 app.session.lastScanSignature = completedScanFingerprint
                 app.session.lastScanSitestUri = sitestUri
