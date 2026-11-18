@@ -21,18 +21,10 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    signingConfigs {
-        create("debugConfig") {
-            storeFile = file("${rootDir}/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-        }
-    }
-
     buildTypes {
+        // Use the Android Gradle Plugin's standard per-user debug keystore.
+        // Never require a developer-local debug.keystore to exist in the repo/CI.
         debug {
-            signingConfig = signingConfigs.getByName("debugConfig")
         }
         release {
             // R8 is on so the release artifact is a real, shrunk build. Conservative
