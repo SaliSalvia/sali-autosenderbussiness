@@ -295,7 +295,7 @@ class AiClient(private val client: OkHttpClient) {
             totalCompletionTokens += repairOut.completionTokens
 
             val candidate = finalize(QualityGate.bestSubject(parseAiResult(repairOut.content)), s)
-            val candidateReport = QualityGate.validate(candidate, s, allowed, isFollowUp)
+            val candidateReport = QualityGate.validate(candidate, s, allowed, isFollowUp, nonClaimIdentifiers)
             if (candidateReport.score >= report.score || candidateReport.passed) {
                 result = candidate
                 report = candidateReport
@@ -303,7 +303,7 @@ class AiClient(private val client: OkHttpClient) {
         }
 
         result.copy(
-            quality = QualityGate.validate(result, s, allowed, isFollowUp),
+            quality = QualityGate.validate(result, s, allowed, isFollowUp, nonClaimIdentifiers),
             modelUsed = activeModel,
             promptTokens = totalPromptTokens,
             completionTokens = totalCompletionTokens
