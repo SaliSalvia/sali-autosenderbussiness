@@ -14,7 +14,7 @@
     <string name="home_subtitle">پلتفرم هوشمند تطبیق گزارش، تحلیل کسب‌وکار و ارسال ایمیل فروش</string>
     <string name="home_workspace">دسترسی سریع</string>
     <string name="home_bulk">کنترل ارسال گروهی</string>
-    <string name="home_bulk_hint">تمام پیام‌های تأییدشده با فاصله امن و ۲ فایل PDF جدیدترین هر پوشه ارسال می‌شوند.</string>
+    <string name="home_bulk_hint">تمام پیام‌های تأییدشده با فاصله امن و جفت PDF آزمایشی فارسی و انگلیسی (هرکدام دقیقاً ۲ صفحه) ارسال می‌شوند.</string>
     <string name="home_send_all">ارسال همه پیام‌های تأییدشده</string>
     <string name="home_queue_empty">صف تأییدشده خالی است</string>
     <string name="home_manage_queue">مدیریت صف و توقف ارسال</string>
@@ -45,7 +45,7 @@
     <string name="send_bulk_empty">پیام تأییدشده‌ای در صف نیست</string>
     <string name="send_waiting">ارسال بعدی تا</string>
     <string name="send_confirm_title">شروع ارسال گروهی</string>
-    <string name="send_confirm_body">پیام‌های تأییدشده با فاصله تنظیم‌شده و پیوست ۲ فایل PDF جدیدترین هر پوشه ارسال خواهند شد. ادامه می‌دهید؟</string>
+    <string name="send_confirm_body">پیام‌های تأییدشده با فاصله تنظیم‌شده و فقط جفت PDF آزمایشی فارسی/انگلیسی، هرکدام دقیقاً ۲ صفحه، ارسال خواهند شد. ادامه می‌دهید؟</string>
     <string name="send_confirm_ok">تأیید و شروع</string>
     <string name="send_confirm_cancel">انصراف</string>
     <string name="send_messages">صف پیام‌ها</string>
