@@ -1,5 +1,8 @@
 # Changelog
 
+همه تغییرات قابلتوجه این پروژه در این فایل ثبت میشود. قالب بر اساس [Keep a Changelog](https://keepachangelog.com/fa/1.1.0/) و نسخهدهی [Semantic Versioning](https://semver.org/lang/fa/) است.
+> نسخه فعلی کاندید: `versionCode = 5` و `versionName = "2.0.2"` در `app/build.gradle.kts`.
+
 ## [2.0.2] — 2026-11-18 · UX and copy polish
 
 ### Improved
@@ -9,9 +12,6 @@
 
 ### Release status
 این نسخه کاندید UX است؛ CI و بررسی نصب روی دستگاه واقعی باید پیش از اعلام آمادگی انتشار انجام شود. موانع P0 در `docs/RELEASE_CHECKLIST.md` همچنان معتبرند.
-
-همه تغییرات قابلتوجه این پروژه در این فایل ثبت میشود. قالب بر اساس [Keep a Changelog](https://keepachangelog.com/fa/1.1.0/) و نسخهدهی [Semantic Versioning](https://semver.org/lang/fa/) است.
-> نسخه فعلی کاندید: `versionCode = 5` و `versionName = "2.0.2"` در `app/build.gradle.kts`.
 
 ## [2.0.1] — 2026-11-18 · Release hardening candidate
 
