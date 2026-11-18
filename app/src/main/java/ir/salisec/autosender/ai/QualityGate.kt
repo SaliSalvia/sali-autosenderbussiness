@@ -59,7 +59,8 @@ object QualityGate {
         result: AiResult,
         s: Settings,
         allowed: Set<String>,
-        isFollowUp: Boolean = false
+        isFollowUp: Boolean = false,
+        nonClaimIdentifiers: Set<String> = emptySet()
     ): QualityReport {
         val all = listOf(result.subject, result.preheader, result.body, result.cta).joinToString("\n")
         val lower = normalizeDigits(all).lowercase()
