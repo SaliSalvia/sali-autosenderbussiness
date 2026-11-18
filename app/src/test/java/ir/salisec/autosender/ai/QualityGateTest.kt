@@ -77,7 +77,9 @@ class QualityGateTest {
         val unsupported = QualityGate.validate(ratio, settings, noScoreAllowed)
         assertFalse(unsupported.passed)
 
-        val inventedHundred = valid().copy(body = valid().body + " ما 100 مشتری فعال داریم.")
+        val inventedHundred = valid().copy(
+            body = valid().body + " امتیاز امنیتی شما 62 از 100 است. همچنین ما 100 مشتری فعال داریم."
+        )
         assertFalse(QualityGate.validate(inventedHundred, settings, allowed(), scoreValue = "62").passed)
     }
 
