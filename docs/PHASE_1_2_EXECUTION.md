@@ -35,16 +35,21 @@
 - A folder containing only one trial PDF is now **not eligible for email approval**. The app requires the complete Persian/English pair.
 - A trial PDF with unknown page count is not eligible. It must be parsed and verified as exactly two pages.
 - Full reports are never selected merely because they are newer than trial files.
+- The reader parses at most six PDFs per domain, but identifies and prioritizes the best filename-matched Persian/English trial pair before applying that cap. Older eligible trial files therefore remain eligible for verification even when newer unrelated reports exist.
+- When no readable, matching, exactly two-page bilingual trial pair exists, the app emits a warning and sends no PDF attachment.
 
 ## Validation status
 
-The repository changes are committed to this feature branch and the pull request CI is the authoritative validation gate. Do not mark the work production-ready until all of these pass:
+The previous feature-branch CI run `44278801794` completed successfully on commit `e03390a7dcb52aee914c7de6be6692d3ab6ae02c`. Unit tests, Android lint, debug APK assembly, release APK/AAB assembly, and artifact upload all succeeded. The run uploaded `SaliBussiness-APK` and `unit-test-coverage` artifacts. This confirms pipeline health for that revision; it does not establish a measured domain-logic coverage threshold or production signing unless signing secrets were configured.
 
-1. Gradle wrapper distribution and configuration.
-2. JVM unit tests, including the 100-case golden set and attachment/snapshot regression tests.
-3. Android lint.
-4. Debug APK assembly.
-5. Release APK/AAB assembly (signing status must be reported honestly based on configured signing secrets).
+Each subsequent change must pass the pull request CI gate. Do not mark the work production-ready until all of these pass:
+
+1. Gradle wrapper distribution and configuration — passed on run `44278801794`.
+2. JVM unit tests, including the 100-case golden set and attachment/snapshot regression tests — passed on run `44278801794`.
+3. Android lint — passed on run `44278801794`.
+4. Debug APK assembly — passed on run `44278801794`.
+5. Release APK/AAB assembly — passed on run `44278801794`; production signing remains conditional on configured signing secrets.
+6. The new trial-priority regression test and updated reader/docs require a fresh CI run before this revision is considered validated.
 
 ## Remaining work — intentionally not claimed complete
 
