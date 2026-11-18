@@ -1,6 +1,5 @@
 package ir.salisec.autosender.ai
 
-import ir.salisec.autosender.data.AggregateStats
 import ir.salisec.autosender.data.PdfDoc
 import ir.salisec.autosender.data.ReportBundle
 import ir.salisec.autosender.data.ReportData
@@ -9,11 +8,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Every digit in an email must come from that site's REAL report pack. */
+/** Every factual digit in an email must be grounded in this recipient's real report pack. */
 class QualityGateTest {
-
     private val settings = Settings()
-
     private fun bundle() = ReportBundle(
         domain = "example.com",
         data = ReportData(
@@ -23,11 +20,7 @@ class QualityGateTest {
         ),
         pdfs = listOf(PdfDoc("acme_scan.pdf", "content://scan", pages = 30, text = "امتیاز 62 از 100"))
     )
-
-    private fun allowed() = QualityGate.allowedNumbers(
-        settings, bundle(), AggregateStats(3, 60)
-    )
-
+    private fun allowed() = QualityGate.allowedNumbers(bundle())
     private fun valid() = AiResult(
         subject = "گزارش امنیتی دامنه example.com",
         preheader = "خلاصه یافتههای اسکن",
@@ -35,50 +28,61 @@ class QualityGateTest {
             "در صورت عدم تمایل، واژه حذف را بنویسید تا از فهرست خارج شوید."
     )
 
-    @Test
-    fun acceptsGroundedCopy() {
+    @Test fun acceptsGroundedCopy() {
         val r = QualityGate.validate(valid(), settings, allowed())
         assertTrue(r.blockers.toString(), r.passed)
     }
 
-    @Test
-    fun allowedNumbersComeFromTheRealReport() {
+    @Test fun allowedNumbersComeOnlyFromTheCurrentReport() {
         val a = allowed()
-        assertTrue(a.contains("62"))
-        assertTrue(a.contains("9"))
-        assertTrue(a.contains("7.5"))
-        assertTrue(a.contains("100"))
+        assertTrue(a.contains("62")); assertTrue(a.contains("9"))
+        assertTrue(a.contains("7.5")); assertTrue(a.contains("100"))
+        assertFalse(a.contains("999")); assertFalse(a.contains("0"))
+        assertFalse(a.contains("2")); assertFalse(a.contains("7")); assertFalse(a.contains("5"))
     }
 
-    @Test
-    fun rejectsAnInventedNumber() {
-        val r = QualityGate.validate(
-            valid().copy(body = valid().body + " تعداد 999 یافته دیگر هم داریم."),
-            settings, allowed()
+    @Test fun missingEvidenceDoesNotReceiveUniversalNumberAllowlist() {
+        assertTrue(QualityGate.allowedNumbers(null).isEmpty())
+        val noNumericEvidence = ReportBundle(
+            domain = "example.com",
+            pdfs = listOf(PdfDoc("report.pdf", "content://report", text = "گزارش امنیتی آماده است"))
         )
+        assertTrue(QualityGate.allowedNumbers(noNumericEvidence).isEmpty())
+    }
+
+    @Test fun scoreDenominatorIsAllowedOnlyWhenTheReportContainsAScore() {
+        val noScore = bundle().copy(
+            data = bundle().data!!.copy(score = null),
+            pdfs = listOf(PdfDoc("report.pdf", "content://report", text = "امتیاز ثبت نشده است"))
+        )
+        assertFalse(QualityGate.allowedNumbers(noScore).contains("100"))
+    }
+
+    @Test fun normalizesPersianDigitsWithoutSplittingDecimalValues() {
+        val parsed = QualityGate.numbers("CVSS برابر ۷٫۵ و امتیاز ۶۲/۱۰۰ است")
+        assertTrue(parsed.contains("7.5")); assertTrue(parsed.contains("62")); assertTrue(parsed.contains("100"))
+        assertFalse(parsed.contains("7")); assertFalse(parsed.contains("5"))
+    }
+
+    @Test fun rejectsAnInventedNumber() {
+        val r = QualityGate.validate(valid().copy(body = valid().body + " تعداد 999 یافته دیگر هم داریم."), settings, allowed())
         assertFalse(r.passed)
         assertTrue(r.blockers.any { it.contains("999") })
     }
 
-    @Test
-    fun rejectsFakeUrgencyAndGuarantees() {
-        val r = QualityGate.validate(
-            valid().copy(body = valid().body + " این پیشنهاد تضمین صد درصد دارد."),
-            settings, allowed()
-        )
+    @Test fun rejectsFakeUrgencyAndGuarantees() {
+        val r = QualityGate.validate(valid().copy(body = valid().body + " این پیشنهاد تضمین صد درصد دارد."), settings, allowed())
         assertFalse(r.passed)
         assertTrue(r.blockers.isNotEmpty())
     }
 
-    @Test
-    fun rejectsDeceptiveReOrFwdSubject() {
+    @Test fun rejectsDeceptiveReOrFwdSubject() {
         val r = QualityGate.validate(valid().copy(subject = "Re: گزارش امنیتی"), settings, allowed())
         assertFalse(r.passed)
         assertTrue(r.blockers.any { it.contains("Re:") || it.contains("جعلی") })
     }
 
-    @Test
-    fun requiresALowFrictionReplyCta() {
+    @Test fun requiresALowFrictionReplyCta() {
         val r = QualityGate.validate(
             valid().copy(body = "گزارش اسکن آماده است؛ در صورت عدم تمایل واژه حذف را بنویسید."),
             settings, allowed()
@@ -87,18 +91,16 @@ class QualityGateTest {
         assertTrue(r.blockers.any { it.contains("فراخوان") })
     }
 
-    @Test
-    fun finalizeDoesNotDuplicateUnsubscribeOrSignature() {
+    @Test fun finalizeDoesNotDuplicateUnsubscribeOrSignature() {
         val client = AiClient(okhttp3.OkHttpClient())
         val first = client.finalize(valid(), settings)
         val second = client.finalize(first, settings)
         assertTrue(first.body == second.body)
-        val unsubCount = second.body.split(settings.unsubscribeFooter.trim()).size - 1
-        assertTrue("Expected exactly 1 unsubscribe footer, got $unsubCount", unsubCount == 1)
+        val count = second.body.split(settings.unsubscribeFooter.trim()).size - 1
+        assertTrue("Expected exactly 1 unsubscribe footer, got $count", count == 1)
     }
 
-    @Test
-    fun parseAiResultStripsReasoningThinkTags() {
+    @Test fun parseAiResultStripsReasoningThinkTags() {
         val client = AiClient(okhttp3.OkHttpClient())
         val raw = """
             <think>
