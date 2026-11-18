@@ -18,7 +18,7 @@ class QualityGateTest {
             critical = 1, high = 3, medium = 4, low = 1,
             freeFindingCvss = "7.5", subdomains = 12
         ),
-        pdfs = listOf(PdfDoc("acme_scan.pdf", "content://scan", pages = 30, text = "امتیاز 62 از 100"))
+        pdfs = listOf(PdfDoc("acme_scan.pdf", "content://scan", pages = 30, text = "امتیاز 62"))
     )
     private fun allowed() = QualityGate.allowedNumbers(bundle())
     private fun valid() = AiResult(
@@ -36,7 +36,8 @@ class QualityGateTest {
     @Test fun allowedNumbersComeOnlyFromTheCurrentReport() {
         val a = allowed()
         assertTrue(a.contains("62")); assertTrue(a.contains("9"))
-        assertTrue(a.contains("7.5")); assertTrue(a.contains("100"))
+        assertTrue(a.contains("7.5"))
+        assertFalse("100 is not a generic allow-list entry", a.contains("100"))
         assertFalse(a.contains("999")); assertFalse(a.contains("0"))
         assertFalse(a.contains("2")); assertFalse(a.contains("7")); assertFalse(a.contains("5"))
     }
@@ -66,7 +67,18 @@ class QualityGateTest {
             data = bundle().data!!.copy(score = null),
             pdfs = listOf(PdfDoc("report.pdf", "content://report", text = "امتیاز ثبت نشده است"))
         )
-        assertFalse(QualityGate.allowedNumbers(noScore).contains("100"))
+        val noScoreAllowed = QualityGate.allowedNumbers(noScore)
+        assertFalse(noScoreAllowed.contains("100"))
+
+        val ratio = valid().copy(body = valid().body + " امتیاز امنیتی شما 62 از 100 است.")
+        val supported = QualityGate.validate(ratio, settings, allowed(), scoreValue = "62")
+        assertTrue(supported.blockers.toString(), supported.passed)
+
+        val unsupported = QualityGate.validate(ratio, settings, noScoreAllowed)
+        assertFalse(unsupported.passed)
+
+        val inventedHundred = valid().copy(body = valid().body + " ما 100 مشتری فعال داریم.")
+        assertFalse(QualityGate.validate(inventedHundred, settings, allowed(), scoreValue = "62").passed)
     }
 
     @Test fun normalizesPersianDigitsWithoutSplittingDecimalValues() {
