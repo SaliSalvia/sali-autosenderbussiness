@@ -312,15 +312,15 @@ object ReportReader {
     }
 
     /** JSON sidecar is authoritative for validated numbers; PDF text is still used for evidence. */
-    internal fun parseSidecar(domain: String, text: String): ReportData? = try {
-        val o = JSONObject(text)
-        val expectedDomain = domain.trim().removePrefix("www.").trimEnd('.')
-        val declaredDomain = o.optString("domain", expectedDomain)
-            .trim().removePrefix("www.").trimEnd('.')
-        if (declaredDomain.isBlank() || !declaredDomain.equals(expectedDomain, ignoreCase = true)) {
-            return null
-        }
-        ReportData(
+    internal fun parseSidecar(domain: String, text: String): ReportData? {
+        return try {
+            val o = JSONObject(text)
+            val expectedDomain = domain.trim().removePrefix("www.").trimEnd('.')
+            val declaredDomain = o.optString("domain", expectedDomain)
+                .trim().removePrefix("www.").trimEnd('.')
+            if (declaredDomain.isBlank() || !declaredDomain.equals(expectedDomain, ignoreCase = true)) {
+                null
+            } else ReportData(
             domain = expectedDomain,
             scanId = jStr(o, "scan_id"),
             score = jInt(o, "score"),
@@ -334,9 +334,10 @@ object ReportReader {
             freeFindingImpact = jStr(o, "free_finding_impact"),
             freeFindingSolution = jStr(o, "free_finding_solution"),
             subdomains = jInt(o, "subdomains")
-        )
-    } catch (e: Exception) {
-        null
+            )
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun jInt(o: JSONObject, key: String): Int? {
