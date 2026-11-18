@@ -16,8 +16,8 @@ data class PdfDoc(
     val sizeBytes: Long = 0L
 )
 
-/** The complete evidence pack for one domain: recent documents + structured facts.
- *  The AI sees `aiContext()`; the mail sender attaches `trialAttachments` (the 2 newest PDFs). */
+/** The evidence pack for one domain: up to six prioritized PDF documents + structured facts.
+ *  The mail sender attaches only a verified two-page Persian/English trial pair. */
 data class ReportBundle(
     val domain: String,
     val folderName: String? = null,
@@ -200,10 +200,25 @@ object AttachmentPolicy {
             pairKey(names[0]) == pairKey(names[1])
     }
 
-    /**
-     * Selects only a matching two-page Persian/English trial pair.
-     * Full reports, unknown page counts and arbitrary recent PDFs fail closed.
-     */
+    /** Finds the best filename-matched pair before PDF page parsing. */
+    fun selectTrialCandidates(pdfs: List<PdfDoc>): List<PdfDoc> {
+        val eligible = pdfs.filter {
+            isTrialName(it.name) && !isFullName(it.name) &&
+                it.name.trim().lowercase().endsWith(".pdf")
+        }
+        val pairs = eligible.filter { isPersianName(it.name) && !isEnglishName(it.name) }.flatMap { fa ->
+            eligible.filter { en ->
+                en.uri != fa.uri && isEnglishName(en.name) && !isPersianName(en.name) &&
+                    pairKey(en.name) == pairKey(fa.name)
+            }.map { en -> fa to en }
+        }
+        val selected = pairs.maxByOrNull {
+            minOf(effectiveRecency(it.first), effectiveRecency(it.second))
+        } ?: return emptyList()
+        return listOf(selected.first, selected.second)
+    }
+
+    /** Selects only a readable, matching two-page Persian/English trial pair. */
     fun selectTrialPair(pdfs: List<PdfDoc>): List<PdfDoc> {
         val eligible = pdfs.filter {
             it.readOk && it.pages == 2 && isTrialName(it.name) &&
