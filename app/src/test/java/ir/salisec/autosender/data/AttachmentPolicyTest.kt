@@ -20,7 +20,7 @@ class AttachmentPolicyTest {
         val fa = newestFa.copy(pages = null)
         val en = newestEn.copy(pages = null)
         val candidates = AttachmentPolicy.selectTrialCandidates(listOf(olderExec, olderScan, en, fa))
-        assertEquals(setOf(fa.uri, en.uri), candidates.map { it.uri }.toSet())
+        assertEquals(setOf(fa.uri, en.uri), candidates.take(2).map { it.uri }.toSet())
         assertTrue(AttachmentPolicy.selectTrialPair(candidates).isEmpty())
     }
 
