@@ -6,6 +6,9 @@ import androidx.documentfile.provider.DocumentFile
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.io.InputStream
 
 /** Reads the user-selected "sitest" folder (SAF).
  *
@@ -131,6 +134,7 @@ object ReportReader {
         folder.listFiles().firstOrNull { it.isFile && it.name?.lowercase()?.endsWith(".json") == true }
 
     private const val MAX_PDFS_FOR_AI = 6
+    internal const val MAX_SIDECAR_BYTES = 256 * 1024
 
     /** Main entry: parse at most six PDFs, prioritizing a matching trial pair, plus an optional JSON sidecar.
      *  Uses Room [pdfCacheDao] when available so unchanged PDFs are not re-parsed by PDFBox. */
@@ -146,7 +150,9 @@ object ReportReader {
 
         val sidecar = children.firstOrNull { it.isFile && it.name?.lowercase()?.endsWith(".json") == true }?.let { f ->
             try {
-                context.contentResolver.openInputStream(f.uri)?.bufferedReader()?.use { it.readText() }
+                context.contentResolver.openInputStream(f.uri)?.use { input ->
+                    readBoundedText(input, MAX_SIDECAR_BYTES)
+                }
             } catch (e: Exception) {
                 warnings.add("خواندن فایل JSON کنار گزارش ناموفق بود: " + f.name)
                 null
@@ -284,11 +290,38 @@ object ReportReader {
         null
     }
 
-    /** JSON sidecar is authoritative for numbers; PDF text is still used for evidence. */
-    private fun parseSidecar(domain: String, text: String): ReportData? = try {
+    /**
+     * Sidecar files are untrusted input. Enforce a byte ceiling before parsing,
+     * and never let a sidecar for another customer/domain become authoritative.
+     */
+    internal fun readBoundedText(input: InputStream, maxBytes: Int): String {
+        require(maxBytes > 0) { "maxBytes must be positive" }
+        val output = ByteArrayOutputStream(minOf(maxBytes, 8 * 1024))
+        val buffer = ByteArray(8 * 1024)
+        var total = 0
+        input.use { stream ->
+            while (true) {
+                val count = stream.read(buffer)
+                if (count < 0) break
+                total += count
+                if (total > maxBytes) throw IOException("Sidecar exceeds the allowed size")
+                output.write(buffer, 0, count)
+            }
+        }
+        return String(output.toByteArray(), Charsets.UTF_8)
+    }
+
+    /** JSON sidecar is authoritative for validated numbers; PDF text is still used for evidence. */
+    internal fun parseSidecar(domain: String, text: String): ReportData? = try {
         val o = JSONObject(text)
+        val expectedDomain = domain.trim().removePrefix("www.").trimEnd('.')
+        val declaredDomain = o.optString("domain", expectedDomain)
+            .trim().removePrefix("www.").trimEnd('.')
+        if (declaredDomain.isBlank() || !declaredDomain.equals(expectedDomain, ignoreCase = true)) {
+            return null
+        }
         ReportData(
-            domain = o.optString("domain", domain).ifBlank { domain },
+            domain = expectedDomain,
             scanId = jStr(o, "scan_id"),
             score = jInt(o, "score"),
             findings = jInt(o, "findings"),
@@ -306,10 +339,21 @@ object ReportReader {
         null
     }
 
-    private fun jInt(o: JSONObject, key: String): Int? = when (val v = o.opt(key)) {
-        is Number -> v.toInt()
-        is String -> v.filter { it.isDigit() || it == '-' }.toIntOrNull()
-        else -> null
+    private fun jInt(o: JSONObject, key: String): Int? {
+        val value = when (val raw = o.opt(key)) {
+            is Number -> {
+                val number = raw.toDouble()
+                if (!number.isFinite() || number % 1.0 != 0.0 || number < 0.0 || number > 100_000.0) {
+                    return null
+                }
+                number.toInt()
+            }
+            is String -> raw.trim().takeIf { it.matches(Regex("""[0-9]{1,6}""")) }?.toIntOrNull()
+            else -> null
+        } ?: return null
+
+        if (key == "score" && value !in 0..100) return null
+        return value
     }
 
     private fun jStr(o: JSONObject, key: String): String? =
