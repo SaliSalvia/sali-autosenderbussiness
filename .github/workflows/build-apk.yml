@@ -25,6 +25,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # Versioned releases are immutable: a vX.Y.Z tag must match Gradle's
+      # versionName before any release build is attempted.
+      - name: Validate version tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_version="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\\1/p' app/build.gradle.kts | head -n 1)"
+          tag_version="${GITHUB_REF_NAME#v}"
+
+          if [[ -z "$app_version" || "$tag_version" != "$app_version" ]]; then
+            echo "::error title=Release tag/version mismatch::Tag $GITHUB_REF_NAME must match app versionName (found: $app_version)"
+            exit 1
+          fi
+
+          echo "Validated release tag $GITHUB_REF_NAME for app version $app_version."
+
       - name: Set up JDK 17
         uses: actions/setup-java@v6
         with:
@@ -108,8 +125,12 @@ jobs:
             echo "production_signed=true" >> "$GITHUB_OUTPUT"
             echo "All production signing inputs are configured."
           elif [[ -z "$SALI_KEYSTORE_BASE64" && -z "$SALI_KEYSTORE_PASSWORD" && -z "$SALI_KEY_ALIAS" && -z "$SALI_KEY_PASSWORD" ]]; then
+            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+              echo "::error title=Release signing secrets missing::Versioned releases require all four SALI_KEYSTORE_* secrets."
+              exit 1
+            fi
             echo "production_signed=false" >> "$GITHUB_OUTPUT"
-            echo "No production signing inputs: only unsigned release validation artifacts will be produced."
+            echo "No production signing inputs: only unsigned CI validation artifacts will be produced."
           else
             echo "Partial signing configuration detected. Configure all four SALI_KEYSTORE_* secrets or remove them all."
             exit 1
@@ -163,8 +184,11 @@ jobs:
             cp "$release_aab" dist/SaliBussiness-unsigned-release.aab
           fi
 
-          find dist -maxdepth 1 -type f \( -name '*.apk' -o -name '*.aab' \) -print0 \
-            | sort -z | xargs -0 -r sha256sum > dist/SHA256SUMS.txt
+          if [[ "${{ steps.signing.outputs.production_signed }}" == "true" ]]; then
+            sha256sum dist/SaliBussiness.apk dist/SaliBussiness.aab > dist/SHA256SUMS.txt
+          else
+            sha256sum dist/SaliBussiness-unsigned-release.apk dist/SaliBussiness-unsigned-release.aab > dist/SHA256SUMS.txt
+          fi
           ls -lh dist/
 
       - name: Upload compiler / test diagnostics on failure
@@ -188,36 +212,16 @@ jobs:
           if-no-files-found: error
           retention-days: 60
 
-      - name: Create/update GitHub Release (main only)
-        if: github.ref == 'refs/heads/main' && steps.signing.outputs.production_signed == 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: latest
-          name: SaliBussiness (latest build)
-          body: |
-            Automatic build with unit tests + lint + R8 release + AAB.
-            This GitHub Release is created only when all four `SALI_KEYSTORE_*`
-            secrets are configured. Unsigned APK/AAB files remain CI artifacts only
-            and are never published under production release names.
-            Only the matching Persian/English two-page trial PDF pair is attached.
-            At most six PDFs per domain are parsed for AI context, with the matching
-            trial pair prioritized even when older than the six newest files.
-            Sending requires explicit human approval, is idempotent, and re-checks opt-out before every request.
-          files: |
-            dist/SaliBussiness.apk
-            dist/SaliBussiness-debug.apk
-            dist/SaliBussiness.aab
-            dist/SHA256SUMS.txt
-          make_latest: true
-
-      - name: Create versioned release on v* tags
+      # main/PR/workflow_dispatch builds stay in Actions artifacts only.
+      # A GitHub Release is published only from an immutable, matching vX.Y.Z tag.
+      - name: Publish versioned GitHub Release
         if: startsWith(github.ref, 'refs/tags/v') && steps.signing.outputs.production_signed == 'true'
         uses: softprops/action-gh-release@v3
         with:
           name: SaliBussiness ${{ github.ref_name }}
           generate_release_notes: true
+          make_latest: true
           files: |
             dist/SaliBussiness.apk
-            dist/SaliBussiness-debug.apk
             dist/SaliBussiness.aab
             dist/SHA256SUMS.txt
