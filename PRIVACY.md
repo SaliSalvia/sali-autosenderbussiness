@@ -1,6 +1,6 @@
 #Privacy Policy / خطمشی حریم خصوصی — SaliBussiness
 
-**آخرین بهروزرسانی / Last updated:** 2026-11-18 · **نسخه اپ / App version:** 2.0.2 candidate (versionCode 5)
+**آخرین بهروزرسانی / Last updated:** 2026-11-18 · **نسخه اپ / App version:** 2.0.3 candidate (versionCode 6)
 
 ---
 
