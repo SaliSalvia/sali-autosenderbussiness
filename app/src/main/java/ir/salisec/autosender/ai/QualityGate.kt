@@ -1,6 +1,5 @@
 package ir.salisec.autosender.ai
 
-import ir.salisec.autosender.data.AggregateStats
 import ir.salisec.autosender.data.ReportBundle
 import ir.salisec.autosender.data.Settings
 
@@ -30,39 +29,28 @@ object QualityGate {
         "SALISECURE", "SALIBUSSINESS", "IP", "DNS", "WAF", "CVE", "PDF"
     )
 
-    private val numberRegex = Regex("""[0-9]+(?:[.,/][0-9]+)?""")
+    private val numberRegex = Regex("""[0-9]+(?:[.,][0-9]+)?""")
     private val capsRegex = Regex("""[A-Z]{4,}""")
 
-    /** Digits that are legitimately available to the copywriter. */
-    fun allowedNumbers(
-        s: Settings,
-        bundle: ReportBundle?,
-        aggregate: AggregateStats?,
-        previousBody: String? = null,
-        contactName: String? = null,
-        domain: String? = null,
-        email: String? = null
-    ): Set<String> {
-        val out = mutableSetOf("100", "0", "1", "2")
-        bundle?.let {
-            out.addAll(numbers(it.allText))
-            it.data?.let { d ->
-                listOf(d.score, d.findings, d.critical, d.high, d.medium, d.low, d.subdomains)
-                    .filterNotNull().forEach { v -> out.add(v.toString()) }
-                d.freeFindingCvss?.let { out.addAll(numbers(it)) }
-                d.scanId?.let { out.addAll(numbers(it)) }
-            }
+    /**
+     * Numeric allow-list derived exclusively from the current target's evidence pack.
+     * Campaign aggregates, recipient metadata, signatures, previous drafts and customer
+     * replies are context, not evidence for factual claims in this recipient's email.
+     */
+    fun allowedNumbers(bundle: ReportBundle?): Set<String> {
+        if (bundle == null) return emptySet()
+
+        val out = mutableSetOf<String>()
+        out.addAll(numbers(bundle.domain))
+        out.addAll(numbers(bundle.allText))
+        bundle.data?.let { d ->
+            out.addAll(numbers(d.domain))
+            listOf(d.score, d.findings, d.critical, d.high, d.medium, d.low, d.subdomains)
+                .filterNotNull()
+                .forEach { out.add(it.toString()) }
+            if (d.score != null) out.add("100")
+            d.freeFindingCvss?.let { out.addAll(numbers(it)) }
         }
-        aggregate?.let { out.add(it.count.toString()); out.add(it.average.toString()) }
-        out.addAll(numbers(s.signature))
-        out.addAll(numbers(s.fromName))
-        out.addAll(numbers(s.fromEmail))
-        out.addAll(numbers(s.replyTo))
-        out.addAll(numbers(s.unsubscribeFooter))
-        contactName?.let { out.addAll(numbers(it)) }
-        domain?.let { out.addAll(numbers(it)) }
-        email?.let { out.addAll(numbers(it)) }
-        previousBody?.let { out.addAll(numbers(it)) }
         return out
     }
 
@@ -155,16 +143,8 @@ object QualityGate {
         )
     }
 
-    fun numbers(text: String): Set<String> {
-        val n = normalizeDigits(text)
-        val out = mutableSetOf<String>()
-        for (m in numberRegex.findAll(n)) {
-            val v = m.value
-            out.add(v)
-            v.split('.', ',', '/').filter { it.isNotEmpty() }.forEach { out.add(it) }
-        }
-        return out
-    }
+    fun numbers(text: String): Set<String> =
+        numberRegex.findAll(normalizeDigits(text)).map { it.value }.toSet()
 
     private fun normalizeDigits(text: String): String {
         val sb = StringBuilder(text.length)
@@ -175,6 +155,7 @@ object QualityGate {
                     '۵' -> '5'; '۶' -> '6'; '۷' -> '7'; '۸' -> '8'; '۹' -> '9'
                     '٠' -> '0'; '١' -> '1'; '٢' -> '2'; '٣' -> '3'; '٤' -> '4'
                     '٥' -> '5'; '٦' -> '6'; '٧' -> '7'; '٨' -> '8'; '٩' -> '9'
+                    '\u066B' -> '.'; '\u066C' -> ','
                     else -> ch
                 }
             )
