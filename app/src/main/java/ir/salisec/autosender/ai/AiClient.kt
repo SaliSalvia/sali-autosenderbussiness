@@ -260,7 +260,7 @@ class AiClient(private val client: OkHttpClient) {
         totalCompletionTokens += draftOut.completionTokens
 
         var result = finalize(QualityGate.bestSubject(parseAiResult(draftOut.content)), s)
-        var report = QualityGate.validate(result, s, allowed, isFollowUp, nonClaimIdentifiers)
+        var report = QualityGate.validate(result, s, allowed, isFollowUp, nonClaimIdentifiers, bundle?.data?.score?.toString())
 
         // 2) CRITIC PASS: ALWAYS run when Critic enabled & maxCalls >= 2 to elevate sales persuasion & exact fit
         if (s.enableCriticPass && calls < maxCalls) {
@@ -274,7 +274,7 @@ class AiClient(private val client: OkHttpClient) {
             totalCompletionTokens += criticOut.completionTokens
 
             val candidate = finalize(QualityGate.bestSubject(parseAiResult(criticOut.content)), s)
-            val candidateReport = QualityGate.validate(candidate, s, allowed, isFollowUp, nonClaimIdentifiers)
+            val candidateReport = QualityGate.validate(candidate, s, allowed, isFollowUp, nonClaimIdentifiers, bundle?.data?.score?.toString())
             if (candidateReport.passed && (!report.passed || candidateReport.score >= report.score - 5)) {
                 result = candidate
                 report = candidateReport
@@ -295,7 +295,7 @@ class AiClient(private val client: OkHttpClient) {
             totalCompletionTokens += repairOut.completionTokens
 
             val candidate = finalize(QualityGate.bestSubject(parseAiResult(repairOut.content)), s)
-            val candidateReport = QualityGate.validate(candidate, s, allowed, isFollowUp, nonClaimIdentifiers)
+            val candidateReport = QualityGate.validate(candidate, s, allowed, isFollowUp, nonClaimIdentifiers, bundle?.data?.score?.toString())
             if (candidateReport.score >= report.score || candidateReport.passed) {
                 result = candidate
                 report = candidateReport
@@ -303,7 +303,7 @@ class AiClient(private val client: OkHttpClient) {
         }
 
         result.copy(
-            quality = QualityGate.validate(result, s, allowed, isFollowUp, nonClaimIdentifiers),
+            quality = QualityGate.validate(result, s, allowed, isFollowUp, nonClaimIdentifiers, bundle?.data?.score?.toString()),
             modelUsed = activeModel,
             promptTokens = totalPromptTokens,
             completionTokens = totalCompletionTokens
@@ -349,7 +349,7 @@ class AiClient(private val client: OkHttpClient) {
         val allowed = QualityGate.allowedNumbers(bundle)
         val nonClaimIdentifiers = listOfNotNull(bundle?.domain, domain, email)
             .map { it.trim() }.filter { it.isNotBlank() }.sortedByDescending { it.length }.toSet()
-        return QualityGate.validate(result, s, allowed, isFollowUp, nonClaimIdentifiers)
+        return QualityGate.validate(result, s, allowed, isFollowUp, nonClaimIdentifiers, bundle?.data?.score?.toString())
     }
 
     private fun buildFacts(
