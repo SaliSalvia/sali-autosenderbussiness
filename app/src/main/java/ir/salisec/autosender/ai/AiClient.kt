@@ -226,6 +226,8 @@ class AiClient(private val client: OkHttpClient) {
 
         // Previous drafts and customer replies are context, never numeric evidence for new claims.
         val allowed = QualityGate.allowedNumbers(bundle)
+        val nonClaimIdentifiers = listOfNotNull(bundle?.domain, domain, email)
+            .map { it.trim() }.filter { it.isNotBlank() }.toSet()
         val facts = buildFacts(
             s, bundle, context, aggregate, contactName, style,
             isFollowUp, previousBody, domain, customerReplyText
@@ -258,7 +260,7 @@ class AiClient(private val client: OkHttpClient) {
         totalCompletionTokens += draftOut.completionTokens
 
         var result = finalize(QualityGate.bestSubject(parseAiResult(draftOut.content)), s)
-        var report = QualityGate.validate(result, s, allowed, isFollowUp)
+        var report = QualityGate.validate(result, s, allowed, isFollowUp, nonClaimIdentifiers)
 
         // 2) CRITIC PASS: ALWAYS run when Critic enabled & maxCalls >= 2 to elevate sales persuasion & exact fit
         if (s.enableCriticPass && calls < maxCalls) {
@@ -272,7 +274,7 @@ class AiClient(private val client: OkHttpClient) {
             totalCompletionTokens += criticOut.completionTokens
 
             val candidate = finalize(QualityGate.bestSubject(parseAiResult(criticOut.content)), s)
-            val candidateReport = QualityGate.validate(candidate, s, allowed, isFollowUp)
+            val candidateReport = QualityGate.validate(candidate, s, allowed, isFollowUp, nonClaimIdentifiers)
             if (candidateReport.passed && (!report.passed || candidateReport.score >= report.score - 5)) {
                 result = candidate
                 report = candidateReport
@@ -345,7 +347,9 @@ class AiClient(private val client: OkHttpClient) {
     ): QualityReport {
         // Previous drafts and customer replies are context, never numeric evidence for new claims.
         val allowed = QualityGate.allowedNumbers(bundle)
-        return QualityGate.validate(result, s, allowed, isFollowUp)
+        val nonClaimIdentifiers = listOfNotNull(bundle?.domain, domain, email)
+            .map { it.trim() }.filter { it.isNotBlank() }.toSet()
+        return QualityGate.validate(result, s, allowed, isFollowUp, nonClaimIdentifiers)
     }
 
     private fun buildFacts(
