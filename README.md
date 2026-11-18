@@ -30,7 +30,7 @@
 > 🗺️ نقشه راه «محصول کلاس جهانی / آماده انتشار»: **[docs/WORLD_CLASS_ROADMAP.md](docs/WORLD_CLASS_ROADMAP.md)**
 > ✅ [چکلیست Go/No-Go](docs/RELEASE_CHECKLIST.md) · [تاریخچه](CHANGELOG.md) · [امنیت](SECURITY.md) · [حریم خصوصی FA/EN](PRIVACY.md) · [مشارکت](CONTRIBUTING.md)
 
-**وضعیت (versionName `2.0.2` / versionCode `5`):** نسخه قابلنصب و سختسازیشده. `compileSdk/targetSdk = 36`،
+**وضعیت کاندید (versionName `2.0.2` / versionCode `5`):** اصلاحات UX در انتظار CI و تأیید نصب روی دستگاه واقعی است؛ آخرین نسخه‌ای که CI آن سبز شده `2.0.1` است. `compileSdk/targetSdk = 36`،
 بیلد CI شامل تست واحد + lint + R8 release + AAB، صف ارسال idempotent با قفل/lease، لاگ بدون PII با نگهداری خودکار ۹۰روزه،
 `allowBackup=false` + `dataExtractionRules`، «پاکسازی کامل دادهها» داخل تنظیمات، و داشبورد کاری با
 **یک دکمه ارسال گروهی** (فقط پیامهای تأییدشده).
