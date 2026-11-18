@@ -61,12 +61,14 @@
 - [x] `targetSdk=36` / `compileSdk=36` / `buildTools 36.0.0` و نصب صریح SDK 36 در CI
 - [ ] رفتارهای **Android 16** روی دستگاه واقعی تست شدند (edge-to-edge، محدودیت FGS `dataSync`، 16KB page size)
 - [x] خروجی **AAB** در CI ساخته و همراه APK + `SHA256SUMS.txt` آپلود میشود
-- [ ] **Play App Signing** و امضای واقعی release (چهار سیکرت `SALI_KEYSTORE_*` هنوز تنظیم نشدهاند)
-- [x] SHA256 و یادداشت انتشار در GitHub Release `latest` (روی `main`)
+- [x] چهار Secret امضای تولیدی `SALI_KEYSTORE_*` تنظیم شده‌اند؛ CI run #100 هر چهار ورودی را تشخیص داد، APK را با `apksigner verify` تأیید کرد و AAB را ساخت.
+- [ ] **Play App Signing** در Play Console و تطبیق کلید آپلود با گواهی مورد انتظار تأیید شود.
+- [x] `SHA256SUMS.txt` برای خروجی Release تولید و در Artifactهای CI آپلود شد.
+- [ ] انتشار نسخه‌ای با تگ منطبق `vX.Y.Z` و فایل‌های APK/AAB امضاشده در GitHub Release نهایی شود؛ انتشارهای `main` به‌تنهایی Release نمی‌سازند.
 - [ ] فهرست فروشگاه (FA/EN)، آیکون، اسکرینشات، Data Safety، دستهبندی
 - [ ] تست داخلی → انتشار مرحلهای ۱۰٪ → ۵۰٪ → ۱۰۰٪؛ **rollback آزمایش شد**
 - [ ] crash-free ≥ ۹۹٫۵٪ و ANR < ۰٫۵٪ در تست داخلی
-- [x] نصب مستقیم از GitHub Release همچنان کار میکند
+- [ ] نصب مستقیم APK از یک GitHub Release نسخه‌ای پس از انتشار و تأیید واقعی آن دوباره بررسی شود
 
 ## ۶. عملیات و مشاهدهپذیری (P1)
 - [ ] لاگ ساختاریافته: `errorCode`, `providerMessageId`, `attempt`, `durationMs`, `costTokens`
