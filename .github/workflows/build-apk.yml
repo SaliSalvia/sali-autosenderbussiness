@@ -94,7 +94,8 @@ jobs:
           set -o pipefail
           ./gradlew --no-daemon assembleDebug --stacktrace 2>&1 | tee build.log
 
-      - name: Build release APK and AAB (R8 on; signed only when secrets exist)
+      - name: Validate release signing configuration
+        id: signing
         env:
           SALI_KEYSTORE_BASE64: ${{ secrets.SALI_KEYSTORE_BASE64 }}
           SALI_KEYSTORE_PASSWORD: ${{ secrets.SALI_KEYSTORE_PASSWORD }}
@@ -103,7 +104,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "$SALI_KEYSTORE_BASE64" ]]; then
+          if [[ -n "$SALI_KEYSTORE_BASE64" && -n "$SALI_KEYSTORE_PASSWORD" && -n "$SALI_KEY_ALIAS" && -n "$SALI_KEY_PASSWORD" ]]; then
+            echo "production_signed=true" >> "$GITHUB_OUTPUT"
+            echo "All production signing inputs are configured."
+          elif [[ -z "$SALI_KEYSTORE_BASE64" && -z "$SALI_KEYSTORE_PASSWORD" && -z "$SALI_KEY_ALIAS" && -z "$SALI_KEY_PASSWORD" ]]; then
+            echo "production_signed=false" >> "$GITHUB_OUTPUT"
+            echo "No production signing inputs: only unsigned release validation artifacts will be produced."
+          else
+            echo "Partial signing configuration detected. Configure all four SALI_KEYSTORE_* secrets or remove them all."
+            exit 1
+          fi
+
+      - name: Build release APK and AAB (R8 on; signed only when all four signing secrets are configured)
+        env:
+          SALI_KEYSTORE_BASE64: ${{ secrets.SALI_KEYSTORE_BASE64 }}
+          SALI_KEYSTORE_PASSWORD: ${{ secrets.SALI_KEYSTORE_PASSWORD }}
+          SALI_KEY_ALIAS: ${{ secrets.SALI_KEY_ALIAS }}
+          SALI_KEY_PASSWORD: ${{ secrets.SALI_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.signing.outputs.production_signed }}" == "true" ]]; then
             printf '%s' "$SALI_KEYSTORE_BASE64" | base64 --decode > sali.keystore
             ./gradlew --no-daemon assembleRelease bundleRelease --stacktrace \
               -Pandroid.injected.signing.storeFile="$PWD/sali.keystore" \
@@ -111,27 +132,32 @@ jobs:
               -Pandroid.injected.signing.keyAlias="$SALI_KEY_ALIAS" \
               -Pandroid.injected.signing.keyPassword="$SALI_KEY_PASSWORD" 2>&1 | tee release.log
           else
-            echo "No signing secrets configured: building UNSIGNED release + AAB to validate R8."
             ./gradlew --no-daemon assembleRelease bundleRelease --stacktrace 2>&1 | tee release.log
           fi
 
-      - name: Collect installable artifacts
+      - name: Collect build artifacts without mislabeling unsigned outputs
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/SaliBussiness-debug.apk
-          if [[ -n "${{ secrets.SALI_KEYSTORE_BASE64 }}" ]]; then
+
+          if [[ "${{ steps.signing.outputs.production_signed }}" == "true" ]]; then
             cp app/build/outputs/apk/release/app-release.apk dist/SaliBussiness.apk
+            bundle_file="$(find app/build/outputs/bundle/release -maxdepth 1 -type f -name '*.aab' -print -quit)"
+            [[ -n "$bundle_file" ]] || { echo "Signed AAB was not produced"; exit 1; }
+            cp "$bundle_file" dist/SaliBussiness.aab
           else
-            # Honest fallback: no secrets => the installable APK is the debug-signed
-            # build. It is NEVER advertised as a production-signed release.
-            cp dist/SaliBussiness-debug.apk dist/SaliBussiness.apk
+            release_apk="$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
+            release_aab="$(find app/build/outputs/bundle/release -maxdepth 1 -type f -name '*.aab' -print -quit)"
+            [[ -n "$release_apk" ]] || { echo "Unsigned release APK was not produced"; exit 1; }
+            [[ -n "$release_aab" ]] || { echo "Unsigned AAB was not produced"; exit 1; }
+            cp "$release_apk" dist/SaliBussiness-unsigned-release.apk
+            cp "$release_aab" dist/SaliBussiness-unsigned-release.aab
           fi
-          if compgen -G "app/build/outputs/bundle/release/*.aab" > /dev/null; then
-            cp app/build/outputs/bundle/release/*.aab dist/SaliBussiness.aab
-          fi
-          (cd dist && sha256sum SaliBussiness*.apk SaliBussiness*.aab 2>/dev/null > SHA256SUMS.txt || true)
+
+          find dist -maxdepth 1 -type f \( -name '*.apk' -o -name '*.aab' \) -print0 \
+            | sort -z | xargs -0 -r sha256sum > dist/SHA256SUMS.txt
           ls -lh dist/
 
       - name: Upload compiler / test diagnostics on failure
@@ -156,16 +182,16 @@ jobs:
           retention-days: 60
 
       - name: Create/update GitHub Release (main only)
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && steps.signing.outputs.production_signed == 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: latest
           name: SaliBussiness (latest build)
           body: |
             Automatic build with unit tests + lint + R8 release + AAB.
-            `SaliBussiness.apk` is the signed release ONLY when the four
-            `SALI_KEYSTORE_*` secrets are configured; otherwise it is an identical
-            copy of `SaliBussiness-debug.apk` and is NOT production-signed.
+            This GitHub Release is created only when all four `SALI_KEYSTORE_*`
+            secrets are configured. Unsigned APK/AAB files remain CI artifacts only
+            and are never published under production release names.
             Only the matching Persian/English two-page trial PDF pair is attached.
             At most six PDFs per domain are parsed for AI context, with the matching
             trial pair prioritized even when older than the six newest files.
@@ -178,7 +204,7 @@ jobs:
           make_latest: true
 
       - name: Create versioned release on v* tags
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && steps.signing.outputs.production_signed == 'true'
         uses: softprops/action-gh-release@v3
         with:
           name: SaliBussiness ${{ github.ref_name }}
