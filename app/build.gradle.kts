@@ -21,11 +21,9 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Debug builds use the Android Gradle Plugin's standard per-user debug keystore.
+    // No developer-local debug.keystore is required in the repository or CI.
     buildTypes {
-        // Use the Android Gradle Plugin's standard per-user debug keystore.
-        // Never require a developer-local debug.keystore to exist in the repo/CI.
-        debug {
-        }
         release {
             // R8 is on so the release artifact is a real, shrunk build. Conservative
             // keep rules protect JavaMail / Room / PDFBox reflection (proguard-rules.pro).
