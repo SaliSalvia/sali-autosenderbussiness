@@ -78,3 +78,5 @@ Each subsequent change must pass the pull request CI gate. Do not mark the work 
 **Validation:** pending a fresh PR CI run. These changes have not yet been verified by CI or on a physical Android 16 device.
 
 **Remaining public-release blockers:** unchecked items in `docs/RELEASE_CHECKLIST.md`, including real-world anonymized Golden Set, end-to-end human-approval test, provider/network fault tests, per-recipient consent basis, SPF/DKIM/DMARC verification, production upload-key/Play App Signing, Android 16 device coverage, and rollout/rollback validation.
+
+- Operational app logs are automatically pruned after 90 days at startup; only the `logs` table is affected, not queued messages or campaign records.
