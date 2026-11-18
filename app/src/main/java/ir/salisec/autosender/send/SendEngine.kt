@@ -68,8 +68,8 @@ sealed class QueueRunOutcome {
  * Queue processor. Sends ONLY human-approved emails, paced, with:
  *  - WorkManager-backed persistent execution + network constraint + business hours window,
  *  - an atomic claim/lease (a killed worker cannot re-send an in-flight item),
- *  - one stable UUID per message (provider-side idempotency),
- *  - UNCERTAIN instead of auto-retry when a response is lost,
+ *  - one stable UUID per message (Brevo idempotency; SMTP Message-ID is for threading only),
+ *  - UNCERTAIN instead of auto-retry for ambiguous provider/SMTP outcomes,
  *  - a defence-in-depth check on opt-out, grounding and real PDF bytes,
  *  - providerMessageId & full References chain persistence for follow-up threading,
  *  - automatic followUpAt cadence scheduling (Day+2 / Day+7),
@@ -457,19 +457,7 @@ class SendEngine(
             }
 
             val latest = db.messageDao().byId(msg.id) ?: continue
-            val stillApproved =
-                latest.messageUuid == uuid &&
-                    latest.email.equals(msg.email, ignoreCase = true) &&
-                    latest.domain.equals(msg.domain, ignoreCase = true) &&
-                    latest.subject == msg.subject &&
-                    latest.preheader == msg.preheader &&
-                    latest.body == msg.body &&
-                    latest.evidenceHash == msg.evidenceHash &&
-                    latest.qualityOk &&
-                    latest.pdfPaths == msg.pdfPaths &&
-                    latest.attachmentNames == msg.attachmentNames &&
-                    latest.attachmentPages == msg.attachmentPages &&
-                    latest.attachmentSha256 == msg.attachmentSha256
+            val stillApproved = SendPreflightGuard.matchesApprovedSnapshot(msg, latest)
             val suppressedNow = prefs.isSuppressed(msg.email, msg.domain)
             if (suppressedNow) {
                 settle(msg, MessageState.SKIPPED, "در فهرست عدم ارسال (opt-out)")
