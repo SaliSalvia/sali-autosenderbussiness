@@ -108,7 +108,7 @@ class BrevoSender(private val client: OkHttpClient) : MailSender {
             .build()
         try {
             client.newBuilder().callTimeout(90, TimeUnit.SECONDS).build().newCall(req).execute().use { resp ->
-                val body = resp.body?.string()?.take(600) ?: ""
+                val body = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     throw mapBrevoFailureToException(resp.code, body)
                 }
