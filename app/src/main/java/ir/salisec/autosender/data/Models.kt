@@ -47,7 +47,7 @@ data class LogEntry(
     val message: String
 )
 
-/** Outbound message handed to a MailSender. `attachments` holds up to 2 newest PDFs. */
+/** Outbound message handed to a MailSender. Campaign attachments must be the verified bilingual two-page trial pair. */
 data class OutgoingMessage(
     val to: String,
     val subject: String,
@@ -69,7 +69,7 @@ fun MessageEntity.pageCounts(): List<Int?> =
 
 /** Match of an email/domain to its report folder in sitest.
  *  `bundle.pdfs` = read by the AI.
- *  `bundle.trialAttachments` = the up-to-2 newest PDFs attached to the email. */
+ *  `bundle.trialAttachments` = the verified Persian/English two-page trial pair, or empty. */
 data class DomainMatch(
     val domain: String,
     val email: String = "",
