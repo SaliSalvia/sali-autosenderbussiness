@@ -154,6 +154,14 @@ interface MessageDao {
     )
     suspend fun claim(id: Long, owner: String, until: Long, now: Long): Int
 
+    /** A claim may return to QUEUED only when cancellation is observed before the provider call. */
+    @Query(
+        "UPDATE messages SET status = 'QUEUED', leaseOwner = NULL, leaseUntil = NULL, " +
+            "lastError = :reason, updatedAt = :now " +
+            "WHERE id = :id AND status = 'SENDING' AND leaseOwner = :owner"
+    )
+    suspend fun releaseClaimBeforeSend(id: Long, owner: String, reason: String, now: Long): Int
+
     @Query(
         "UPDATE messages SET status = 'UNCERTAIN', leaseOwner = NULL, leaseUntil = NULL, " +
             "lastError = :reason, updatedAt = :now " +
