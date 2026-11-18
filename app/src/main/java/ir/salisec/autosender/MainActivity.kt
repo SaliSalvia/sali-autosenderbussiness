@@ -88,7 +88,7 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppShell(app: App) {
-    val firstRunSetup = remember { app.prefs.load().isThunderbirdSetupNeeded() }
+    var firstRunSetup by remember { mutableStateOf(app.prefs.load().isThunderbirdSetupNeeded()) }
     var current by remember { mutableStateOf<Screen>(if (firstRunSetup) Screen.EmailSetup else Screen.Home) }
     var previousTab by remember { mutableStateOf<Screen>(Screen.Home) }
     var pendingCount by remember { mutableIntStateOf(0) }
@@ -260,7 +260,10 @@ fun AppShell(app: App) {
                 Screen.EmailSetup -> EmailSetupWizard(
                     app = app,
                     isFirstRun = firstRunSetup,
-                    onDone = { current = Screen.Home }
+                    onDone = {
+                        firstRunSetup = false
+                        current = Screen.Home
+                    }
                 )
             }
         }

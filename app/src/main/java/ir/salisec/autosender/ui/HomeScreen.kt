@@ -160,15 +160,24 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                MetricTile("مخاطب فعال", contacts.size.toString(), Modifier.weight(1f))
-                MetricTile("آماده ارسال", pendingCount.toString(), Modifier.weight(1f))
-                MetricTile("ارسال‌شده", sentTotal.toString(), Modifier.weight(1f))
-                if (totalTokens > 0) {
-                    MetricTile("توکن کل", totalTokens.toString(), Modifier.weight(1f))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MetricTile("مخاطب فعال", contacts.size.toString(), Modifier.weight(1f))
+                    MetricTile("آماده ارسال", pendingCount.toString(), Modifier.weight(1f))
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MetricTile("ارسال‌شده", sentTotal.toString(), Modifier.weight(1f))
+                    if (totalTokens > 0) {
+                        MetricTile("توکن مصرفی", totalTokens.toString(), Modifier.weight(1f))
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
                 }
             }
 
@@ -233,7 +242,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
         Section(header = stringResource(R.string.home_workspace), icon = Icons.Default.FolderOpen) {
             HomeCard(
                 title = "کمپین سریع و تطبیق خودکار sitest",
-                subtitle = "ورود سطری ایمیل‌ها، انتخاب ۲ PDF جدیدترین، سرچ You.com و طراحی با ۴ الگو",
+                subtitle = "ورود مخاطبان، انتخاب جفت Trial فارسی و انگلیسی، جستجوی You.com و طراحی با ۴ الگو",
                 icon = Icons.Default.AutoAwesome,
                 accent = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.testTag("home_card_campaign")

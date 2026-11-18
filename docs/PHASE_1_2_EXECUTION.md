@@ -67,7 +67,7 @@ Each subsequent change must pass the pull request CI gate. Do not mark the work 
 ## Release hardening candidate — 2026-11-18
 
 **Branch:** `release/hardening-polish`  
-**Target version:** `2.0.1` / `versionCode 4`
+**Target version:** `2.0.2` / `versionCode 5`
 
 - Send-time evidence freshness is enforced: the selected SAF tree is reopened, the matching domain folder is resolved again, PDFs are reparsed without the Room PDF cache, and the current evidence fingerprint plus exact bilingual attachment URI/name order are compared to the approval snapshot. Any mismatch or permission loss skips the message and requires a fresh scan and human approval.
 - Test-to-self attachments now use the same strict two-page bilingual trial-pair, PDF structure, per-file and total-size validation. A no-attachment preview remains supported.
