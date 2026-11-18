@@ -109,6 +109,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.util.UUID
+import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicInteger
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -281,7 +282,11 @@ fun CampaignStudioScreen(
                 val readyKeys = result.filter { it.readyForApproval }.map { it.key }.toSet()
                 val preserved = app.session.selected.value.intersect(readyKeys)
                 app.session.selected.value = if (preserved.isNotEmpty()) preserved else readyKeys
-                app.session.lastScanSignature = contactsSignatureForScan(contacts)
+                val completedScanFingerprint = withContext(Dispatchers.IO) {
+                    val latestRoot = DocumentFile.fromTreeUri(context, Uri.parse(sitestUri))
+                    latestRoot?.let { folderScanFingerprint(it, contactsSignature, sitestUri) }.orEmpty()
+                }
+                app.session.lastScanSignature = completedScanFingerprint
                 app.session.lastScanSitestUri = sitestUri
             } catch (e: SecurityException) {
                 scanError = "مجوز دسترسی به پوشه sitest منقضی شده؛ لطفاً دوباره انتخاب کنید."
@@ -296,7 +301,12 @@ fun CampaignStudioScreen(
     val contactsSignature = remember(contacts) { contactsSignatureForScan(contacts) }
     LaunchedEffect(contactsSignature, sitestUri) {
         if (contacts.isNotEmpty() && sitestUri.isNotBlank()) {
-            if (app.session.lastScanSignature == contactsSignature &&
+            val currentFolderFingerprint = withContext(Dispatchers.IO) {
+                val root = DocumentFile.fromTreeUri(context, Uri.parse(sitestUri))
+                if (root == null || !root.canRead()) "" else folderScanFingerprint(root, contactsSignature, sitestUri)
+            }
+            if (currentFolderFingerprint.isNotBlank() &&
+                app.session.lastScanSignature == currentFolderFingerprint &&
                 app.session.lastScanSitestUri == sitestUri &&
                 matches.isNotEmpty()
             ) {
@@ -1639,6 +1649,45 @@ private fun QuickTemplatesDialog(
             TextButton(onClick = onDismiss) { Text("بستن") }
         }
     )
+}
+
+
+/**
+ * Stable scan cache key over all contact inputs and the live SAF folder tree.
+ * File name, size and modified time are included so replacing/updating a PDF or
+ * sidecar in the same folder URI invalidates cached report matches.
+ */
+private fun folderScanFingerprint(
+    root: DocumentFile,
+    contactsSignature: String,
+    sitestUri: String
+): String {
+    val canonical = buildString {
+        append("sitest=").append(sitestUri).append('\n')
+        append("contacts=").append(contactsSignature).append('\n')
+        val folders = runCatching { root.listFiles().filter { it.isDirectory } }
+            .getOrElse { return "" }
+            .sortedBy { it.uri.toString() }
+        folders.forEach { folder ->
+            append("folder|").append(folder.name.orEmpty()).append('|')
+                .append(folder.uri).append('|').append(folder.lastModified()).append('\n')
+            val relevantFiles = runCatching {
+                folder.listFiles().filter { file ->
+                    file.isFile && (
+                        file.name?.endsWith(".pdf", ignoreCase = true) == true ||
+                            file.name?.endsWith(".json", ignoreCase = true) == true
+                        )
+                }
+            }.getOrElse { return "" }.sortedBy { it.uri.toString() }
+            relevantFiles.forEach { file ->
+                append("file|").append(file.name.orEmpty()).append('|')
+                    .append(file.uri).append('|').append(file.length()).append('|')
+                    .append(file.lastModified()).append('\n')
+            }
+        }
+    }
+    val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
+    return digest.joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 }
 
 private fun contactsSignatureForScan(contacts: List<ir.salisec.autosender.data.Contact>): String =
