@@ -18,10 +18,10 @@
 |---|---|---|
 | کلیدهای hcnsec / You.com / Brevo / IMAP | `EncryptedSharedPreferences` (AES، Keystore دستگاه) | رمزنگاری at rest؛ هرگز در لاگ/artifact/Release چاپ نمیشود |
 | لیست مخاطبان (دامنه، ایمیل، نام)، موضوع و متن ایمیلها، لاگها | Room `sali.db` روی دستگاه | فقط محلی؛ بدون آپلود به سرور ما (هیچ بکندی وجود ندارد). آدرسها در لاگها و خروجی لاگ **ماسک** میشوند (`PrivacyRedactor`) |
-| متن گزارشهای PDF | حافظه موقتی حین تولید متن | فقط به hcnsec بهعنوان زمینه نگارش ارسال میشود |
+| متن استخراج‌شده PDF / sidecar | حافظه موقت + Room `pdf_cache` روی دستگاه | فقط بخش شواهد همان دامنه برای تولید متن به hcnsec ارسال می‌شود؛ cache محلی تا پاکسازی کامل داده‌ها می‌ماند و DB جداگانه با SQLCipher رمز نشده است |
 | زمینه عمومی شرکت | You.com Search API | فقط اطلاعات سطح شرکت؛ snippetها از ایمیل/تلفن پاکسازی میشوند |
 
-✅ **رفعشده در 2.1.0:** `android:allowBackup="false"`، `usesCleartextTraffic="false"`، `network_security_config` (فقط system Trust Anchors)، لاگها و خطاها بدون PII/کلید، Migration واقعی Room `2→3`، و idempotency UUID با حالت `UNCERTAIN` بهجای retry خودکار هنگام گمشدن پاسخ. سیاست کامل: [`PRIVACY.md`](PRIVACY.md).
+✅ **وضعیت خط اصلی پیش از این PR در 2.0.2 (versionCode 5):** `android:allowBackup="false"`، `usesCleartextTraffic="false"`، `network_security_config` (فقط system Trust Anchors)، لاگها و خطاها بدون PII/کلید، Migration واقعی Room `2→3`، و idempotency UUID با حالت `UNCERTAIN` بهجای retry خودکار هنگام گمشدن پاسخ. سیاست کامل: [`PRIVACY.md`](PRIVACY.md).
 
 > ⚠️ **شکافهای باقیمانده (قبل از انتشار عمومی):** Golden Set واقعی، وبحوک bounce/complaint، رضایت مستند بهازای هر مخاطب، تأیید عملی SPF/DKIM/DMARC دامنه فرستنده، و Play App Signing / AAB امضاشده. «پاکسازی کامل دادهها» داخل اپ و `dataExtractionRules` اضافه شدند. جزئیات: [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
 
@@ -41,5 +41,6 @@
 ## Supported versions
 | نسخه | وضعیت |
 |---|---|
-| `2.0.0` / versionCode 3 (فعلی) | پشتیبانی و رفع اشکال امنیتی |
-| `< 2.0.0` | بدون پشتیبانی (هرگز منتشر نشد) |
+| `2.0.3` / versionCode 6 (کاندید این PR) | در انتظار CI و merge؛ پس از تأیید build، هنوز انتشار عمومی/Play به چک‌لیست Go/No-Go وابسته است |
+| `2.0.2` / versionCode 5 | خط اصلی قبلی؛ Release تگ‌دار فاقد asset است |
+| نسخه‌های قدیمی‌تر از `2.0.2` | بدون تضمین پشتیبانی؛ برای وصله‌های امنیتی به نسخه اصلی به‌روز شوید |
