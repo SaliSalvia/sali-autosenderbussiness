@@ -30,7 +30,7 @@
 > 🗺️ نقشه راه «محصول کلاس جهانی / آماده انتشار»: **[docs/WORLD_CLASS_ROADMAP.md](docs/WORLD_CLASS_ROADMAP.md)**
 > ✅ [چکلیست Go/No-Go](docs/RELEASE_CHECKLIST.md) · [تاریخچه](CHANGELOG.md) · [امنیت](SECURITY.md) · [حریم خصوصی FA/EN](PRIVACY.md) · [مشارکت](CONTRIBUTING.md)
 
-**وضعیت کاندید (versionName `2.0.2` / versionCode `5`):** CI مربوط به اصلاحات فعلی، شامل تست واحد، lint، APK و AAB و امضای Release، موفق شده است؛ نصب و آزمون روی دستگاه واقعی Android 16 هنوز انجام و تأیید نشده است. `compileSdk/targetSdk = 36`،
+**وضعیت کاندید (versionName `2.0.3` / versionCode `6`):** اصلاحات hardening نهایی در PR مستقل هستند و باید CI تست، lint، APK و AAB آن را تأیید کند؛ نصب و آزمون روی دستگاه واقعی Android 16 هنوز انجام نشده است. `compileSdk/targetSdk = 36`،
 بیلد CI شامل تست واحد + lint + R8 release + AAB، صف ارسال idempotent با قفل/lease، لاگ بدون PII با نگهداری خودکار ۹۰روزه،
 `allowBackup=false` + `dataExtractionRules`، «پاکسازی کامل دادهها» داخل تنظیمات، و داشبورد کاری با
 **یک دکمه ارسال گروهی** (فقط پیامهای تأییدشده).
