@@ -1,7 +1,24 @@
 # Changelog
 
 همه تغییرات قابلتوجه این پروژه در این فایل ثبت میشود. قالب بر اساس [Keep a Changelog](https://keepachangelog.com/fa/1.1.0/) و نسخهدهی [Semantic Versioning](https://semver.org/lang/fa/) است.
-> نسخه فعلی کاندید: `versionCode = 5` و `versionName = "2.0.2"` در `app/build.gradle.kts`.
+> نسخه فعلی کاندید: `versionCode = 6` و `versionName = "2.0.3"` در `app/build.gradle.kts`.
+
+## [2.0.3] — 2026-11-18 · Final hardening candidate
+
+### Security and reliability
+- ارسال صفی درست پیش از درخواست provider دوباره cancellation، وضعیت approval، محتوای تأییدشده، مالک lease و opt-out را بررسی می‌کند؛ در صورت لغو پیش از درخواست، claim به صف بازمی‌گردد.
+- settlement وضعیت نهایی را روی آخرین ردیف Room اعمال می‌کند تا snapshot قدیمی ویرایش یا demotion هم‌زمان را overwrite نکند.
+- پاکسازی کامل داده‌ها ابتدا queue را متوقف می‌کند، cacheها و draftها را پاک می‌کند و مجوز پایدار SAF را آزاد می‌کند.
+- JSON sidecar با سقف ۲۵۶KiB خوانده می‌شود، domain آن باید با پوشه هدف منطبق باشد و اعداد منفی، اعشاری یا خارج از محدوده رد می‌شوند.
+- promptها صریحاً PDF، sidecar، You.com، قالب‌های مرجع، پاسخ مشتری و draftهای قبلی را محتوای غیرقابل اعتماد می‌دانند؛ دستورهای جاسازی‌شده نباید اجرا شوند.
+- هدر `List-Unsubscribe-Post` حذف شد؛ برنامه تنها mailto unsubscribe را ادعا می‌کند و قابلیت RFC 8058 one-click را بدون endpoint واقعی تبلیغ نمی‌کند.
+
+### Privacy and release readiness
+- خط‌مشی حریم خصوصی اکنون ذخیره محلی متن PDF در Room `pdf_cache` و نبود رمزنگاری مستقل دیتابیس را افشا می‌کند.
+- انتشار فقط با تگ نسخه‌ای منطبق انجام می‌شود؛ `v2.0.2` قدیمی بدون asset باقی می‌ماند و برای این کاندید، نسخه جدید `v2.0.3` / `versionCode 6` آماده می‌شود.
+
+### Validation
+CI این کاندید پس از بازبینی باید تست، lint، APK و AAB را تأیید کند. تست دستگاه واقعی Android 16 و موارد باقی‌مانده P0 در `docs/RELEASE_CHECKLIST.md` هنوز شرط انتشار عمومی/Play هستند.
 
 ## [2.0.2] — 2026-11-18 · UX and copy polish
 
