@@ -127,10 +127,10 @@ jobs:
           if [[ "${{ steps.signing.outputs.production_signed }}" == "true" ]]; then
             printf '%s' "$SALI_KEYSTORE_BASE64" | base64 --decode > sali.keystore
             ./gradlew --no-daemon assembleRelease bundleRelease --stacktrace \
-              -Pandroid.injected.signing.storeFile="$PWD/sali.keystore" \
-              -Pandroid.injected.signing.storePassword="$SALI_KEYSTORE_PASSWORD" \
-              -Pandroid.injected.signing.keyAlias="$SALI_KEY_ALIAS" \
-              -Pandroid.injected.signing.keyPassword="$SALI_KEY_PASSWORD" 2>&1 | tee release.log
+              -Pandroid.injected.signing.store.file="$PWD/sali.keystore" \
+              -Pandroid.injected.signing.store.password="$SALI_KEYSTORE_PASSWORD" \
+              -Pandroid.injected.signing.key.alias="$SALI_KEY_ALIAS" \
+              -Pandroid.injected.signing.key.password="$SALI_KEY_PASSWORD" 2>&1 | tee release.log
           else
             ./gradlew --no-daemon assembleRelease bundleRelease --stacktrace 2>&1 | tee release.log
           fi
@@ -143,7 +143,14 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk dist/SaliBussiness-debug.apk
 
           if [[ "${{ steps.signing.outputs.production_signed }}" == "true" ]]; then
-            cp app/build/outputs/apk/release/app-release.apk dist/SaliBussiness.apk
+            apk_file="$(find app/build/outputs/apk/release -maxdepth 2 -type f -name '*.apk' ! -name '*unsigned*' -print -quit)"
+            [[ -n "$apk_file" ]] || { echo "Signed release APK was not produced"; find app/build/outputs/apk/release -type f -print; exit 1; }
+
+            apksigner="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+            [[ -x "$apksigner" ]] || { echo "apksigner not found"; exit 1; }
+            "$apksigner" verify --verbose "$apk_file"
+
+            cp "$apk_file" dist/SaliBussiness.apk
             bundle_file="$(find app/build/outputs/bundle/release -maxdepth 1 -type f -name '*.aab' -print -quit)"
             [[ -n "$bundle_file" ]] || { echo "Signed AAB was not produced"; exit 1; }
             cp "$bundle_file" dist/SaliBussiness.aab
