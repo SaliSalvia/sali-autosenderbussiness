@@ -316,7 +316,7 @@ class SendEngine(
                 break
             }
             if (db.messageDao().claim(candidate.id, OWNER, now + LEASE_MS, now) == 0) continue
-            val msg = db.messageDao().byId(candidate.id) ?: continue
+            var msg = db.messageDao().byId(candidate.id) ?: continue
             if (!MessageState.isSendable(candidate.status) || msg.status != MessageState.SENDING) {
                 settle(msg, MessageState.SKIPPED, "وضعیت پیام دیگر قابل ارسال نیست")
                 skipped++
@@ -416,7 +416,8 @@ class SendEngine(
             val uuid = msg.messageUuid?.takeIf { it.isNotBlank() }
                 ?: UUID.randomUUID().toString()
             if (msg.messageUuid.isNullOrBlank()) {
-                db.messageDao().update(msg.copy(messageUuid = uuid))
+                msg = msg.copy(messageUuid = uuid)
+                db.messageDao().update(msg)
             }
 
             // Look up full thread chain (Message-IDs in chronological order) for clean email threading
@@ -442,10 +443,56 @@ class SendEngine(
                 references = fullReferences ?: parentId
             )
 
+            // Re-check cancellation, approval state and opt-out immediately before the
+            // provider call. Evidence/PDF verification above may take a meaningful amount
+            // of time, during which the user can cancel or add a suppression entry.
+            if (cancelRequested) {
+                db.messageDao().releaseClaimBeforeSend(
+                    msg.id,
+                    OWNER,
+                    "ارسال پیش از درخواست به ارائه‌دهنده لغو شد؛ پیام در صف باقی ماند",
+                    System.currentTimeMillis()
+                )
+                break
+            }
+
+            val latest = db.messageDao().byId(msg.id) ?: continue
+            val stillApproved =
+                latest.messageUuid == uuid &&
+                    latest.subject == msg.subject &&
+                    latest.body == msg.body &&
+                    latest.evidenceHash == msg.evidenceHash &&
+                    latest.qualityOk
+            val suppressedNow = prefs.isSuppressed(msg.email, msg.domain)
+            if (suppressedNow) {
+                settle(msg, MessageState.SKIPPED, "در فهرست عدم ارسال (opt-out)")
+                skipped++
+                _state.value = _state.value.copy(skipped = skipped)
+                log(msg, false, "رد شد: مخاطب درخواست حذف داده است")
+                continue
+            }
+            if (!SendPreflightGuard.canSubmit(
+                    cancelRequested = cancelRequested,
+                    isSuppressed = suppressedNow,
+                    approvalStillCurrent = stillApproved,
+                    status = latest.status,
+                    leaseOwner = latest.leaseOwner,
+                    expectedLeaseOwner = OWNER
+                )
+            ) {
+                // A concurrent edit demotes the queued row. Do not overwrite that
+                // draft state or submit the stale copy that was prepared above.
+                skipped++
+                _state.value = _state.value.copy(skipped = skipped)
+                log(msg, false, "ارسال متوقف شد: وضعیت یا تأیید پیام پیش از ارسال تغییر کرده است")
+                continue
+            }
+
+            val sendSettings = prefs.load()
             val attempts = msg.attempts + 1
             try {
-                val sender = if (settings.sendMode == "BREVO_API") brevo else smtp
-                val receipt = sender.send(settings, out)
+                val sender = if (sendSettings.sendMode == "BREVO_API") brevo else smtp
+                val receipt = sender.send(sendSettings, out)
                 val nextFollowUpAt = computeNextFollowUpAt(msg, settings, System.currentTimeMillis())
                 val nextRefs = listOfNotNull(fullReferences, receipt.providerMessageId)
                     .joinToString(" ")
@@ -575,17 +622,29 @@ class SendEngine(
         followUpAt: Long? = m.followUpAt,
         threadReferences: String? = m.threadReferences
     ) {
+        // Merge into the latest row rather than writing an old snapshot over a
+        // concurrent edit/demotion. A provider-confirmed send (or ambiguous
+        // outcome) is terminal even if the UI changed the draft while it was in flight.
+        val latest = db.messageDao().byId(m.id) ?: return
+        val providerMayHaveAccepted = sent || status == MessageState.UNCERTAIN
+        if (latest.status != MessageState.SENDING && !providerMayHaveAccepted) return
+
+        val finalStatus = when {
+            sent -> MessageState.SENT
+            status == MessageState.UNCERTAIN -> MessageState.UNCERTAIN
+            else -> status
+        }
         db.messageDao().update(
-            m.copy(
-                status = status,
+            latest.copy(
+                status = finalStatus,
                 lastError = error?.let { PrivacyRedactor.redact(it).take(200) },
-                sentAt = if (sent) System.currentTimeMillis() else m.sentAt,
-                attempts = attempts,
+                sentAt = if (sent) System.currentTimeMillis() else latest.sentAt,
+                attempts = maxOf(latest.attempts, attempts),
                 leaseOwner = null,
                 leaseUntil = null,
-                providerMessageId = providerMessageId ?: m.providerMessageId,
+                providerMessageId = providerMessageId ?: latest.providerMessageId,
                 followUpAt = followUpAt,
-                threadReferences = threadReferences ?: m.threadReferences,
+                threadReferences = threadReferences ?: latest.threadReferences,
                 updatedAt = System.currentTimeMillis()
             )
         )
