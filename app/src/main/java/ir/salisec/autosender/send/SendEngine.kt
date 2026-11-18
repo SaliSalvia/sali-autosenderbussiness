@@ -2,6 +2,7 @@ package ir.salisec.autosender.send
 
 import android.content.Context
 import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
@@ -11,6 +12,8 @@ import ir.salisec.autosender.data.AppDatabase
 import ir.salisec.autosender.data.AttachmentGuard
 import ir.salisec.autosender.data.AttachmentPolicy
 import ir.salisec.autosender.data.AttachmentSnapshotReader
+import ir.salisec.autosender.data.EvidenceApprovalGuard
+import ir.salisec.autosender.data.ReportReader
 import ir.salisec.autosender.data.LogEntity
 import ir.salisec.autosender.data.LogEntry
 import ir.salisec.autosender.data.MessageEntity
@@ -169,7 +172,7 @@ class SendEngine(
         WorkManager.getInstance(appContext).enqueueUniqueWork(UNIQUE_WORK_NAME, ExistingWorkPolicy.REPLACE, req)
     }
 
-    /** Sends a preview copy of a draft (plus up to 2 PDF attachments) to the user's OWN email. */
+    /** Sends a preview to the configured sender mailbox; optional attachments must be the verified trial pair. */
     suspend fun sendTestToSelf(
         subject: String,
         preheader: String,
@@ -187,10 +190,30 @@ class SendEngine(
             settings.maxAttachmentMb.coerceIn(1, 4) * 1024L * 1024L
         )
         try {
-            val attachments = attachmentUris.mapIndexed { i, uri ->
-                val bytes = readBounded(appContext, uri, perFileCap)
-                val name = attachmentNames.getOrNull(i) ?: AttachmentPolicy.displayName(uri)
-                name to bytes
+            val attachments = if (attachmentUris.isEmpty()) {
+                if (attachmentNames.isNotEmpty()) {
+                    throw IllegalArgumentException("نام پیوست بدون فایل انتخاب‌شده معتبر نیست")
+                }
+                emptyList()
+            } else {
+                if (attachmentUris.size != 2) {
+                    throw IllegalArgumentException("برای ایمیل تست فقط جفت کامل PDF آزمایشی فارسی و انگلیسی مجاز است")
+                }
+                val names = attachmentNames.takeIf { it.size == attachmentUris.size }
+                    ?: attachmentUris.map { AttachmentPolicy.displayName(it) }
+                AttachmentGuard.validateNames(names)?.let { throw IllegalArgumentException(it) }
+                val payloads = attachmentUris.map { uri -> readBounded(appContext, uri, perFileCap) }
+                val snapshots = payloads.map { bytes -> AttachmentSnapshotReader.inspect(bytes) }
+                val validation = AttachmentGuard.validateFiles(
+                    names = names,
+                    approvedPages = snapshots.map { it.pages },
+                    approvedSha256 = snapshots.map { it.sha256 },
+                    actualPages = snapshots.map { it.pages },
+                    payloads = payloads,
+                    perFileCapMb = settings.maxAttachmentMb
+                )
+                validation?.let { throw IllegalArgumentException(it) }
+                names.zip(payloads)
             }
             val msg = OutgoingMessage(
                 to = settings.fromEmail.trim(),
@@ -263,40 +286,37 @@ class SendEngine(
         )
 
         var outcome: QueueRunOutcome = QueueRunOutcome.Completed
-        var capNotice: String? = null
 
-        try {
-            while (isActive && !cancelRequested) {
-                val now = System.currentTimeMillis()
-                val settings = prefs.load()
-                if (!isWithinBusinessHours(settings, now)) {
-                    val delayMs = delayUntilNextBusinessHourMs(settings, now)
-                    _state.value = _state.value.copy(
-                        running = false,
-                        waitingForBusinessHours = true,
-                        waitingUntil = now + delayMs,
-                        currentDomain = null
-                    )
-                    outcome = QueueRunOutcome.RescheduleOutsideHours(delayMs)
-                    break
-                }
-
-                db.messageDao().markStuckUncertain(
-                    now,
-                    "مهلت ارسال پایان یافت؛ نتیجهٔ ارائه‌دهنده نامشخص است و بررسی انسانی لازم است"
+        while (isActive && !cancelRequested) {
+            val now = System.currentTimeMillis()
+            val settings = prefs.load()
+            if (!isWithinBusinessHours(settings, now)) {
+                val delayMs = delayUntilNextBusinessHourMs(settings, now)
+                _state.value = _state.value.copy(
+                    running = false,
+                    waitingForBusinessHours = true,
+                    waitingUntil = now + delayMs,
+                    currentDomain = null
                 )
-                val candidate = db.messageDao().nextSendable(now) ?: break
-                if (_state.value.paused) {
-                    waitWhilePaused()
-                    if (cancelRequested) break
-                }
-                if (sentToday >= settings.dailyCap) {
-                    capNotice = "سقف ارسال روزانه (${settings.dailyCap} ایمیل) تکمیل شد."
-                    log(candidate, false, "سقف روزانه رسیده است؛ صف متوقف شد")
-                    break
-                }
+                outcome = QueueRunOutcome.RescheduleOutsideHours(delayMs)
+                break
+            }
+
+            db.messageDao().markStuckUncertain(
+                now,
+                "مهلت ارسال پایان یافت؛ نتیجهٔ ارائه‌دهنده نامشخص است و بررسی انسانی لازم است"
+            )
+            val candidate = db.messageDao().nextSendable(now) ?: break
+            if (_state.value.paused) {
+                waitWhilePaused()
+                if (cancelRequested) break
+            }
+            if (sentToday >= settings.dailyCap) {
+                log(candidate, false, "سقف روزانه رسیده است؛ صف متوقف شد")
+                break
+            }
             if (db.messageDao().claim(candidate.id, OWNER, now + LEASE_MS, now) == 0) continue
-            val msg = db.messageDao().byId(candidate.id) ?: continue
+            var msg = db.messageDao().byId(candidate.id) ?: continue
             if (!MessageState.isSendable(candidate.status) || msg.status != MessageState.SENDING) {
                 settle(msg, MessageState.SKIPPED, "وضعیت پیام دیگر قابل ارسال نیست")
                 skipped++
@@ -311,8 +331,8 @@ class SendEngine(
                 log(msg, false, "رد شد: مخاطب درخواست حذف داده است")
                 continue
             }
-            if (!msg.qualityOk || msg.evidenceHash.isBlank()) {
-                settle(msg, MessageState.SKIPPED, "گیت صحت / شواهد متن تأیید نشده است")
+            if (!msg.qualityOk || !msg.evidenceHash.matches(Regex("(?i)^[0-9a-f]{64}$"))) {
+                settle(msg, MessageState.SKIPPED, "گیت صحت / هش کامل شواهد تأیید نشده است؛ پیام را دوباره بررسی و تأیید کنید")
                 skipped++
                 _state.value = _state.value.copy(skipped = skipped)
                 log(msg, false, "رد شد: متن تأییدنشده یا بدون شواهد")
@@ -331,6 +351,15 @@ class SendEngine(
                 skipped++
                 _state.value = _state.value.copy(skipped = skipped)
                 log(msg, false, "رد شد: $nameProblem")
+                continue
+            }
+
+            val evidenceProblem = validateCurrentEvidence(msg, paths, names, settings)
+            if (evidenceProblem != null) {
+                settle(msg, MessageState.SKIPPED, evidenceProblem)
+                skipped++
+                _state.value = _state.value.copy(skipped = skipped)
+                log(msg, false, "رد شد: اعتبار شواهد پس از تأیید تغییر کرده است")
                 continue
             }
 
@@ -387,24 +416,17 @@ class SendEngine(
             val uuid = msg.messageUuid?.takeIf { it.isNotBlank() }
                 ?: UUID.randomUUID().toString()
             if (msg.messageUuid.isNullOrBlank()) {
-                db.messageDao().update(msg.copy(messageUuid = uuid))
+                msg = msg.copy(messageUuid = uuid)
+                db.messageDao().update(msg)
             }
 
             // Look up full thread chain (Message-IDs in chronological order) for clean email threading
             val priorHistory = db.messageDao().byEmail(msg.email)
                 .filter { it.id != msg.id && !it.providerMessageId.isNullOrBlank() }
                 .sortedBy { it.sentAt ?: it.createdAt }
-            val existingRefs = msg.threadReferences
-                ?.split(Regex("""\s+"""))
-                ?.map { it.trim() }
-                ?.filter { it.isNotBlank() }
-                .orEmpty()
-            val mergedRefsList = (priorHistory.mapNotNull { it.providerMessageId?.trim() } + existingRefs).distinct()
-            val parentId = if (msg.isFollowUp) {
-                priorHistory.lastOrNull()?.providerMessageId ?: existingRefs.lastOrNull()
-            } else null
-            val fullReferences = if (mergedRefsList.isNotEmpty()) {
-                mergedRefsList.joinToString(" ")
+            val parentId = if (msg.isFollowUp) priorHistory.lastOrNull()?.providerMessageId else null
+            val fullReferences = if (msg.isFollowUp && priorHistory.isNotEmpty()) {
+                priorHistory.mapNotNull { it.providerMessageId?.trim() }.distinct().joinToString(" ")
             } else msg.threadReferences
 
             _state.value = _state.value.copy(currentDomain = msg.domain)
@@ -421,17 +443,74 @@ class SendEngine(
                 references = fullReferences ?: parentId
             )
 
+            // Re-check cancellation, approval state and opt-out immediately before the
+            // provider call. Evidence/PDF verification above may take a meaningful amount
+            // of time, during which the user can cancel or add a suppression entry.
+            if (cancelRequested) {
+                db.messageDao().releaseClaimBeforeSend(
+                    msg.id,
+                    OWNER,
+                    "ارسال پیش از درخواست به ارائه‌دهنده لغو شد؛ پیام در صف باقی ماند",
+                    System.currentTimeMillis()
+                )
+                break
+            }
+
+            val latest = db.messageDao().byId(msg.id) ?: continue
+            val stillApproved =
+                latest.messageUuid == uuid &&
+                    latest.email.equals(msg.email, ignoreCase = true) &&
+                    latest.domain.equals(msg.domain, ignoreCase = true) &&
+                    latest.subject == msg.subject &&
+                    latest.preheader == msg.preheader &&
+                    latest.body == msg.body &&
+                    latest.evidenceHash == msg.evidenceHash &&
+                    latest.qualityOk &&
+                    latest.pdfPaths == msg.pdfPaths &&
+                    latest.attachmentNames == msg.attachmentNames &&
+                    latest.attachmentPages == msg.attachmentPages &&
+                    latest.attachmentSha256 == msg.attachmentSha256
+            val suppressedNow = prefs.isSuppressed(msg.email, msg.domain)
+            if (suppressedNow) {
+                settle(msg, MessageState.SKIPPED, "در فهرست عدم ارسال (opt-out)")
+                skipped++
+                _state.value = _state.value.copy(skipped = skipped)
+                log(msg, false, "رد شد: مخاطب درخواست حذف داده است")
+                continue
+            }
+            if (!SendPreflightGuard.canSubmit(
+                    cancelRequested = cancelRequested,
+                    isSuppressed = suppressedNow,
+                    approvalStillCurrent = stillApproved,
+                    status = latest.status,
+                    leaseOwner = latest.leaseOwner,
+                    expectedLeaseOwner = OWNER
+                )
+            ) {
+                // A concurrent edit demotes the queued row. Do not overwrite that
+                // draft state or submit the stale copy that was prepared above.
+                skipped++
+                _state.value = _state.value.copy(skipped = skipped)
+                log(msg, false, "ارسال متوقف شد: وضعیت یا تأیید پیام پیش از ارسال تغییر کرده است")
+                continue
+            }
+
+            val sendSettings = prefs.load()
+            if (!sendSettings.hasOutgoingConfigured()) {
+                settle(msg, MessageState.SKIPPED, "تنظیمات فرستنده هنگام آماده‌سازی ارسال تغییر کرده یا ناقص شده است")
+                skipped++
+                _state.value = _state.value.copy(skipped = skipped)
+                log(msg, false, "ارسال متوقف شد: تنظیمات فرستنده دیگر کامل نیست")
+                continue
+            }
             val attempts = msg.attempts + 1
             try {
-                val sender = if (settings.sendMode == "BREVO_API") brevo else smtp
-                val receipt = sender.send(settings, out)
-                val nextFollowUpAt = computeNextFollowUpAt(msg, settings, System.currentTimeMillis())
+                val sender = if (sendSettings.sendMode == "BREVO_API") brevo else smtp
+                val receipt = sender.send(sendSettings, out)
+                val nextFollowUpAt = computeNextFollowUpAt(msg, sendSettings, System.currentTimeMillis())
                 val nextRefs = listOfNotNull(fullReferences, receipt.providerMessageId)
-                    .flatMap { it.split(Regex("""\s+""")) }
-                    .map { it.trim() }
-                    .filter { it.isNotBlank() }
-                    .distinct()
                     .joinToString(" ")
+                    .trim()
                     .takeIf { it.isNotBlank() }
                 settle(
                     m = msg,
@@ -448,7 +527,7 @@ class SendEngine(
                 _state.value = _state.value.copy(sent = sent, sentToday = sentToday)
                 log(msg, true, "ارسال شد | پیوست: " + names.joinToString(" + "))
             } catch (e: DuplicateSendException) {
-                val nextFollowUpAt = computeNextFollowUpAt(msg, settings, System.currentTimeMillis())
+                val nextFollowUpAt = computeNextFollowUpAt(msg, sendSettings, System.currentTimeMillis())
                 settle(msg, MessageState.SENT, null, sent = true, attempts = attempts, followUpAt = nextFollowUpAt)
                 sent++
                 sentToday++
@@ -471,11 +550,6 @@ class SendEngine(
 
             val next = db.messageDao().nextSendable(System.currentTimeMillis())
             if (next != null && !cancelRequested) {
-                if (sentToday >= settings.dailyCap) {
-                    capNotice = "سقف ارسال روزانه (${settings.dailyCap} ایمیل) تکمیل شد."
-                    log(next, false, "سقف روزانه رسیده است؛ صف متوقف شد")
-                    break
-                }
                 val delayMs = (settings.delaySeconds + (0..maxOf(0, settings.jitterSeconds)).random()) * 1000L
                 _state.value = _state.value.copy(waitingUntil = System.currentTimeMillis() + delayMs)
                 var waited = 0L
@@ -484,7 +558,6 @@ class SendEngine(
                         _state.value = _state.value.copy(waitingUntil = null)
                         waitWhilePaused()
                         if (cancelRequested) break
-                        _state.value = _state.value.copy(waitingUntil = System.currentTimeMillis() + (delayMs - waited))
                     }
                     delay(1000)
                     waited += 1000
@@ -492,19 +565,56 @@ class SendEngine(
                 _state.value = _state.value.copy(waitingUntil = null)
             }
         }
-        } finally {
-            if (outcome is QueueRunOutcome.Completed) {
-                _state.value = _state.value.copy(
-                    running = false,
-                    paused = false,
-                    currentDomain = null,
-                    waitingUntil = null,
-                    waitingForBusinessHours = false,
-                    errorNotice = capNotice ?: _state.value.errorNotice
-                )
-            }
+        if (outcome is QueueRunOutcome.Completed) {
+            _state.value = _state.value.copy(running = false, currentDomain = null, waitingUntil = null, waitingForBusinessHours = false)
         }
         outcome
+    }
+
+    /**
+     * Rebuilds the evidence pack from the currently granted sitest tree immediately
+     * before sending. A message is skipped if the source folder, report content,
+     * or selected bilingual trial attachment pair no longer matches approval.
+     */
+    private suspend fun validateCurrentEvidence(
+        message: MessageEntity,
+        approvedUris: List<String>,
+        approvedNames: List<String>,
+        settings: Settings
+    ): String? = withContext(Dispatchers.IO) {
+        val treeUri = settings.sitestFolderUri.trim()
+        if (treeUri.isBlank()) {
+            return@withContext "پوشه گزارش‌ها پس از تأیید در دسترس نیست؛ کمپین را دوباره اسکن و تأیید کنید"
+        }
+        val root = try {
+            DocumentFile.fromTreeUri(appContext, Uri.parse(treeUri))
+        } catch (_: Exception) {
+            null
+        }
+        if (root == null || !root.isDirectory || !root.canRead()) {
+            return@withContext "دسترسی پوشه گزارش‌ها معتبر نیست؛ پوشه را دوباره انتخاب و کمپین را تأیید کنید"
+        }
+        val folder = try {
+            ReportReader.findFolder(root, message.domain, message.email)
+        } catch (_: Exception) {
+            null
+        } ?: return@withContext "پوشه گزارش دامنه پیدا نشد؛ کمپین را دوباره اسکن و تأیید کنید"
+
+        val currentBundle = try {
+            // Deliberately bypass PDF cache: approval must be checked against current source files.
+            ReportReader.readBundle(appContext, message.domain, folder, pdfCacheDao = null)
+        } catch (_: Exception) {
+            return@withContext "خواندن دوباره شواهد گزارش ناموفق بود؛ کمپین را دوباره اسکن و تأیید کنید"
+        }
+        val currentPair = currentBundle.trialAttachments
+        EvidenceApprovalGuard.validate(
+            approvedFingerprint = message.evidenceHash,
+            currentFingerprint = currentBundle.fingerprint(),
+            approvedAttachmentUris = approvedUris,
+            currentAttachmentUris = currentPair.map { it.uri },
+            approvedAttachmentNames = approvedNames,
+            currentAttachmentNames = currentPair.map { it.name }
+        )
     }
 
     private fun computeNextFollowUpAt(msg: MessageEntity, s: Settings, sentNow: Long): Long? {
@@ -526,17 +636,29 @@ class SendEngine(
         followUpAt: Long? = m.followUpAt,
         threadReferences: String? = m.threadReferences
     ) {
+        // Merge into the latest row rather than writing an old snapshot over a
+        // concurrent edit/demotion. A provider-confirmed send (or ambiguous
+        // outcome) is terminal even if the UI changed the draft while it was in flight.
+        val latest = db.messageDao().byId(m.id) ?: return
+        val providerMayHaveAccepted = sent || status == MessageState.UNCERTAIN
+        if (latest.status != MessageState.SENDING && !providerMayHaveAccepted) return
+
+        val finalStatus = when {
+            sent -> MessageState.SENT
+            status == MessageState.UNCERTAIN -> MessageState.UNCERTAIN
+            else -> status
+        }
         db.messageDao().update(
-            m.copy(
-                status = status,
+            latest.copy(
+                status = finalStatus,
                 lastError = error?.let { PrivacyRedactor.redact(it).take(200) },
-                sentAt = if (sent) System.currentTimeMillis() else m.sentAt,
-                attempts = attempts,
+                sentAt = if (sent) System.currentTimeMillis() else latest.sentAt,
+                attempts = maxOf(latest.attempts, attempts),
                 leaseOwner = null,
                 leaseUntil = null,
-                providerMessageId = providerMessageId ?: m.providerMessageId,
+                providerMessageId = providerMessageId ?: latest.providerMessageId,
                 followUpAt = followUpAt,
-                threadReferences = threadReferences ?: m.threadReferences,
+                threadReferences = threadReferences ?: latest.threadReferences,
                 updatedAt = System.currentTimeMillis()
             )
         )
