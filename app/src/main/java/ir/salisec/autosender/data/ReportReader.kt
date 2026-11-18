@@ -299,14 +299,12 @@ object ReportReader {
         val output = ByteArrayOutputStream(minOf(maxBytes, 8 * 1024))
         val buffer = ByteArray(8 * 1024)
         var total = 0
-        input.use { stream ->
-            while (true) {
-                val count = stream.read(buffer)
-                if (count < 0) break
-                total += count
-                if (total > maxBytes) throw IOException("Sidecar exceeds the allowed size")
-                output.write(buffer, 0, count)
-            }
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            total += count
+            if (total > maxBytes) throw IOException("Sidecar exceeds the allowed size")
+            output.write(buffer, 0, count)
         }
         return String(output.toByteArray(), Charsets.UTF_8)
     }
