@@ -1,6 +1,6 @@
 package ir.salisec.autosender.data
 
-/** Parsed security report data (from JSON sidecar and/or the text of ALL PDFs). */
+/** Parsed security report data (from JSON sidecar and/or the parsed PDF subset). */
 data class ReportData(
     val domain: String,
     val scanId: String? = null,
@@ -68,7 +68,7 @@ fun MessageEntity.pageCounts(): List<Int?> =
     (attachmentPages ?: "").split("||").map { it.trim().toIntOrNull() }
 
 /** Match of an email/domain to its report folder in sitest.
- *  `bundle.pdfs` = read by the AI.
+ *  `bundle.pdfs` = up to six prioritized PDFs parsed for AI context.
  *  `bundle.trialAttachments` = the verified Persian/English two-page trial pair, or empty. */
 data class DomainMatch(
     val domain: String,
