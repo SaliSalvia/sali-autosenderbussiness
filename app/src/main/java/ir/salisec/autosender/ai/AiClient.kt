@@ -224,10 +224,10 @@ class AiClient(private val client: OkHttpClient) {
         }
         if (activeModel.isBlank()) activeModel = "gpt-4o"
 
-        val allowed = QualityGate.allowedNumbers(
-            s, bundle, aggregate, previousBody, contactName,
-            domain.ifBlank { bundle?.domain.orEmpty() }, email
-        ) + (customerReplyText?.let { QualityGate.numbers(it) } ?: emptySet())
+        // Previous drafts and customer replies are context, never numeric evidence for new claims.
+        val allowed = QualityGate.allowedNumbers(bundle)
+        val nonClaimIdentifiers = listOfNotNull(bundle?.domain, domain, email, contactName)
+            .map { it.trim() }.filter { it.isNotBlank() }.sortedByDescending { it.length }.toSet()
         val facts = buildFacts(
             s, bundle, context, aggregate, contactName, style,
             isFollowUp, previousBody, domain, customerReplyText
@@ -260,7 +260,7 @@ class AiClient(private val client: OkHttpClient) {
         totalCompletionTokens += draftOut.completionTokens
 
         var result = finalize(QualityGate.bestSubject(parseAiResult(draftOut.content)), s)
-        var report = QualityGate.validate(result, s, allowed, isFollowUp)
+        var report = QualityGate.validate(result, s, allowed, isFollowUp, nonClaimIdentifiers, bundle?.data?.score?.toString())
 
         // 2) CRITIC PASS: ALWAYS run when Critic enabled & maxCalls >= 2 to elevate sales persuasion & exact fit
         if (s.enableCriticPass && calls < maxCalls) {
@@ -274,7 +274,7 @@ class AiClient(private val client: OkHttpClient) {
             totalCompletionTokens += criticOut.completionTokens
 
             val candidate = finalize(QualityGate.bestSubject(parseAiResult(criticOut.content)), s)
-            val candidateReport = QualityGate.validate(candidate, s, allowed, isFollowUp)
+            val candidateReport = QualityGate.validate(candidate, s, allowed, isFollowUp, nonClaimIdentifiers, bundle?.data?.score?.toString())
             if (candidateReport.passed && (!report.passed || candidateReport.score >= report.score - 5)) {
                 result = candidate
                 report = candidateReport
@@ -295,7 +295,7 @@ class AiClient(private val client: OkHttpClient) {
             totalCompletionTokens += repairOut.completionTokens
 
             val candidate = finalize(QualityGate.bestSubject(parseAiResult(repairOut.content)), s)
-            val candidateReport = QualityGate.validate(candidate, s, allowed, isFollowUp)
+            val candidateReport = QualityGate.validate(candidate, s, allowed, isFollowUp, nonClaimIdentifiers, bundle?.data?.score?.toString())
             if (candidateReport.score >= report.score || candidateReport.passed) {
                 result = candidate
                 report = candidateReport
@@ -303,7 +303,7 @@ class AiClient(private val client: OkHttpClient) {
         }
 
         result.copy(
-            quality = QualityGate.validate(result, s, allowed, isFollowUp),
+            quality = QualityGate.validate(result, s, allowed, isFollowUp, nonClaimIdentifiers, bundle?.data?.score?.toString()),
             modelUsed = activeModel,
             promptTokens = totalPromptTokens,
             completionTokens = totalCompletionTokens
@@ -345,11 +345,11 @@ class AiClient(private val client: OkHttpClient) {
         email: String = "",
         customerReplyText: String? = null
     ): QualityReport {
-        val allowed = QualityGate.allowedNumbers(
-            s, bundle, aggregate, previousBody, contactName,
-            domain.ifBlank { bundle?.domain.orEmpty() }, email
-        ) + (customerReplyText?.let { QualityGate.numbers(it) } ?: emptySet())
-        return QualityGate.validate(result, s, allowed, isFollowUp)
+        // Previous drafts and customer replies are context, never numeric evidence for new claims.
+        val allowed = QualityGate.allowedNumbers(bundle)
+        val nonClaimIdentifiers = listOfNotNull(bundle?.domain, domain, email, contactName)
+            .map { it.trim() }.filter { it.isNotBlank() }.sortedByDescending { it.length }.toSet()
+        return QualityGate.validate(result, s, allowed, isFollowUp, nonClaimIdentifiers, bundle?.data?.score?.toString())
     }
 
     private fun buildFacts(
@@ -405,7 +405,7 @@ class AiClient(private val client: OkHttpClient) {
         } else if (isFollowUp) {
             sb.append("\nاین ایمیل پیگیری (Follow-up) با هدف تبدیل به خرید است. متن قبلی: ")
                 .append(previousBody?.take(600).orEmpty()).append('\n')
-            sb.append("زیر ۹۵ کلمه، محترمانه، با اشاره به یکی دیگر از نکات مهم گزارش پیوست‌شده و دعوت به دریافت گزارش کامل و جلسه ۱۵ دقیقه‌ای بررسی.\n")
+            sb.append("زیر ۹۵ کلمه، محترمانه، با اشاره به یکی دیگر از نکات مهم گزارش پیوست‌شده و دعوت به دریافت گزارش کامل و گفتگوی کوتاه بررسی.\n")
         } else {
             sb.append("\nهدف ایمیل اول: بیشترین نرخ بازشدن (Open Rate)، پاسخ (Reply Rate) و تبدیل به خرید گزارش کامل و خدمات امنیتی.\n")
             sb.append("اصل طراحی: ترکیب «اطلاعات واقعی کسب‌وکار از You.com» + «شواهد واقعی فایل‌های PDF» + «ساختار و لحن الهام‌گرفته از الگوهای کاربر».\n")
@@ -428,11 +428,11 @@ class AiClient(private val client: OkHttpClient) {
 مشتری به ایمیل قبلی پاسخ داده است. با دقت پاسخ مشتری را بخوان و پاسخی دقیق، گرم، حرفه‌ای و متقاعدکننده بنویس که:
 ۱. مستقیماً به سوال، نیاز یا دغدغه مشتری پاسخ دهد (از اطلاعات کسب‌وکار You.com و شواهد PDF استفاده کن).
 ۲. ارزش دریافت گزارش کامل و نقشه رفع اولویت‌بندی‌شده را شفاف توضیح دهد.
-۳. بدون اغراق یا عدد ساختگی، با یک دعوت کم‌اصطکاک به پاسخ کوتاه یا هماهنگی گفتگوی ۱۵ دقیقه‌ای ختم شود.
+۳. بدون اغراق یا عدد ساختگی، با یک دعوت کم‌اصطکاک به پاسخ کوتاه یا هماهنگی گفتگوی کوتاه ختم شود.
 خروجی فقط JSON با کلیدهای {"subject": "...", "subject_alternatives": ["...", "...", "..."], "preheader": "...", "body": "...", "cta": "..."} است. امضا و خط خروج از فهرست ننویس.""" + "\n\n" + untrustedSourceBoundary()
         isFollowUp -> """تو استراتژیست ارشد فروش B2B فارسی در حوزه امنیت سایبری هستی.
 قوانین سخت: فقط از داده‌های واقعی شواهد و جستجوی You.com استفاده کن؛ هیچ عدد، درصد، تاریخ یا ادعای غیرواقعی نساز. بدون تهدید، ترساندن یا مهلت ساختگی.
-لحن: حرفه‌ای، اجرایی، کوتاه و متقاعدکننده (زیر ۹۵ کلمه). به ۲ فایل گزارش پیوست‌شده اشاره کن و فقط یک فراخوان شفاف بده: پاسخ کوتاه به همین ایمیل برای دریافت گزارش کامل و برنامه رفع فوری.
+لحن: حرفه‌ای، اجرایی، کوتاه و متقاعدکننده (زیر ۹۵ کلمه). به دو فایل گزارش پیوست‌شده اشاره کن و فقط یک فراخوان شفاف بده: پاسخ کوتاه به همین ایمیل برای دریافت گزارش کامل و برنامه رفع فوری.
 خروجی فقط JSON با کلیدهای subject ، subject_alternatives (آرایه ۳ تایی) ، preheader ، body ، cta است. امضا و خط خروج از فهرست ننویس.""" + "\n\n" + untrustedSourceBoundary()
         else -> {
             val hasTemplates = s.referenceTemplates().isNotEmpty()
@@ -448,7 +448,7 @@ $templateDirective
 1. Hook اختصاصی مبتنی بر You.com: در جمله اول یا دوم دقیقاً نشان بده می‌دانی این شرکت در چه حوزه‌ای فعالیت می‌کند، چه محصول/خدمتی می‌فروشد و اعتماد آنلاین یا زیرساخت فنی چه نقشی در درآمدش دارد (کلی‌گویی ممنوع!).
 2. اثبات فنی با داده واقعی PDF: یک یافته یا شاخص عینی از فایل‌های PDF اسکن‌شده مطرح کن تا اقتدار تخصصی و اعتماد فوری بسازی.
 3. ارزش تجاری (Business ROI): پیامد واقعی موضوع را روی فروش آنلاین، برند، انطباق یا پایداری سرویس توضیح بده (حرفه‌ای و منطقی، بدون اغراق و بدون ترساندن).
-4. اهرم ۲ پیوست آماده: اشاره کن دو نسخه خلاصه ارزیابی (فارسی و انگلیسی) به همین ایمیل پیوست شده تا تیم فنی در ۲ دقیقه اولویت‌ها را ببیند.
+4. اهرم پیوست‌ها: توضیح بده دو نسخه خلاصه ارزیابی (فارسی و انگلیسی) به همین ایمیل پیوست شده‌اند تا تیم فنی بتواند اولویت‌ها را سریع بررسی کند.
 5. فراخوان پاسخ بسیار کم‌اصطکاک (CTA): دعوت روشن به پاسخ کوتاه به همین ایمیل (مثلاً درخواست نسخه کامل یا هماهنگی گفتگوی کوتاه).
 
 قوانین غیرقابل نقض:

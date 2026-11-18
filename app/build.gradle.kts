@@ -45,10 +45,10 @@ android {
         compose = true
     }
 
-    // Lint runs in CI as a report; warnings must not silently turn a green build red.
+    // Lint errors fail CI for both variants; warnings remain visible for controlled cleanup.
     lint {
-        abortOnError = false
-        checkReleaseBuilds = false
+        abortOnError = true
+        checkReleaseBuilds = true
         warningsAsErrors = false
     }
 

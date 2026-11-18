@@ -1,5 +1,6 @@
 package ir.salisec.autosender.send
 
+import ir.salisec.autosender.data.MessageEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -78,6 +79,80 @@ class MessageStateTest {
         assertFalse(allowed(status = MessageState.UNCERTAIN))
         assertFalse(allowed(owner = "another-worker"))
         assertFalse(allowed(owner = null))
+    }
+
+
+    @Test
+    fun cancellationBeforeProviderStartPreventsExternalRequest() {
+        val gate = ProviderStartGate()
+        gate.cancel()
+        assertTrue(gate.isCancellationRequested())
+        assertFalse(gate.tryBeginProviderCall())
+    }
+
+    @Test
+    fun cancellationAfterProviderStartDoesNotPretendRequestNeverStarted() {
+        val gate = ProviderStartGate()
+        assertTrue(gate.tryBeginProviderCall())
+        gate.cancel()
+        assertTrue(gate.isCancellationRequested())
+        assertFalse(gate.tryBeginProviderCall())
+    }
+
+    @Test
+    fun resetAllowsANewQueueRunToStart() {
+        val gate = ProviderStartGate()
+        gate.cancel()
+        gate.reset()
+        assertFalse(gate.isCancellationRequested())
+        assertTrue(gate.tryBeginProviderCall())
+    }
+
+    @Test
+    fun approvalSnapshotRejectsAnySendRelevantEditDuringPreparation() {
+        val approved = MessageEntity(
+            domain = "example.com",
+            email = "sales@example.com",
+            name = "Sales",
+            subject = "گزارش امنیتی دامنه",
+            body = "متن تأییدشده",
+            preheader = "خلاصه گزارش",
+            pdfPaths = "content://fa||content://en",
+            attachmentNames = "trial_fa.pdf||trial.pdf",
+            attachmentPages = "2||2",
+            attachmentSha256 = "a".repeat(64) + "||" + "b".repeat(64),
+            evidenceHash = "c".repeat(64),
+            qualityOk = true,
+            messageUuid = "stable-message-uuid",
+            status = MessageState.SENDING
+        )
+        val operationalOnlyChange = approved.copy(attempts = 1, lastError = "diagnostic", updatedAt = 1234L)
+        assertTrue(SendPreflightGuard.matchesApprovedSnapshot(approved, operationalOnlyChange))
+        assertFalse(SendPreflightGuard.matchesApprovedSnapshot(approved, null))
+        assertFalse(SendPreflightGuard.matchesApprovedSnapshot(approved.copy(qualityOk = false), approved.copy(qualityOk = false)))
+
+        val editedRows = listOf(
+            approved.copy(body = "متن ویرایش‌شده"),
+            approved.copy(subject = "موضوع جدید"),
+            approved.copy(preheader = "پیش‌نمایش جدید"),
+            approved.copy(evidenceHash = "d".repeat(64)),
+            approved.copy(pdfPaths = "content://changed"),
+            approved.copy(attachmentNames = "different.pdf"),
+            approved.copy(attachmentPages = "3||2"),
+            approved.copy(attachmentSha256 = "e".repeat(64)),
+            approved.copy(email = "other@example.com"),
+            approved.copy(name = "Different Contact"),
+            approved.copy(domain = "other.example"),
+            approved.copy(qualityOk = false),
+            approved.copy(lastReplySnippet = "New customer reply"),
+            approved.copy(isFollowUp = true),
+            approved.copy(followUpStep = 1),
+            approved.copy(threadReferences = "<parent@example.com>")
+        )
+        editedRows.forEach { changed ->
+            assertFalse("Changed send-relevant snapshot must fail closed",
+                SendPreflightGuard.matchesApprovedSnapshot(approved, changed))
+        }
     }
 
 }

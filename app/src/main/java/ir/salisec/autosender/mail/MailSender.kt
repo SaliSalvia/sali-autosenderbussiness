@@ -38,6 +38,23 @@ class DuplicateSendException : RuntimeException("duplicate_parameter")
  *  automatically: the queue moves to UNCERTAIN and a human decides. */
 class AmbiguousSendException(message: String) : RuntimeException(message)
 
+/** Only a structured provider code proves that an idempotency key was already processed. */
+internal fun mapBrevoFailureToException(code: Int, body: String): RuntimeException {
+    val providerCode = try {
+        JSONObject(body).optString("code", "")
+    } catch (_: Exception) {
+        ""
+    }
+    if (code == 400 && providerCode == "duplicate_parameter") return DuplicateSendException()
+
+    val clean = PrivacyRedactor.redact(body).take(300)
+    return if (code == 408 || code >= 500) {
+        AmbiguousSendException("Brevo $code: $clean")
+    } else {
+        RuntimeException("Brevo $code: $clean")
+    }
+}
+
 private fun looksAmbiguous(text: String?): Boolean {
     if (text == null) return true
     val t = text.lowercase()
@@ -91,14 +108,9 @@ class BrevoSender(private val client: OkHttpClient) : MailSender {
             .build()
         try {
             client.newBuilder().callTimeout(90, TimeUnit.SECONDS).build().newCall(req).execute().use { resp ->
-                val body = resp.body?.string()?.take(600) ?: ""
-                if (resp.code == 400 && body.contains("duplicate_parameter", ignoreCase = true)) {
-                    throw DuplicateSendException()
-                }
+                val body = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
-                    val clean = PrivacyRedactor.redact(body).take(300)
-                    if (resp.code >= 500) throw AmbiguousSendException("Brevo ${resp.code}: $clean")
-                    throw RuntimeException("Brevo ${resp.code}: $clean")
+                    throw mapBrevoFailureToException(resp.code, body)
                 }
                 val msgId = try {
                     JSONObject(body).optString("messageId", "").takeIf { it.isNotBlank() }?.let { normalizeMessageId(it) }
@@ -115,7 +127,7 @@ class BrevoSender(private val client: OkHttpClient) : MailSender {
     }
 }
 
-/** Standard SMTP / SMTPS sender (supports both port 465 SSL & port 587 STARTTLS, MIME HTML+Text, threading, List-Unsubscribe). */
+/** Standard SMTP / SMTPS sender. Deterministic Message-ID is for threading/traceability, not deduplication. */
 class SmtpSender : MailSender {
     override suspend fun send(s: Settings, msg: OutgoingMessage): SendReceipt = withContext(Dispatchers.IO) {
         val useSsl = s.smtpSecurity == "SSL" || s.smtpPort == 465
@@ -192,13 +204,17 @@ class SmtpSender : MailSender {
 
         val proto = if (useSsl) "smtps" else "smtp"
         val transport = session.getTransport(proto)
+        var sendAttempted = false
         try {
             transport.connect(s.smtpHost.trim(), s.smtpPort, s.smtpUser.trim(), s.smtpPass)
+            // SMTP may accept DATA before the client receives the final response.
+            // Message-ID helps threading but is not a server-side idempotency guarantee.
+            sendAttempted = true
             transport.sendMessage(mm, mm.allRecipients)
             SendReceipt(rfcMsgId)
         } catch (e: Exception) {
-            if (looksAmbiguous(e.message)) {
-                throw AmbiguousSendException(PrivacyRedactor.redact(e.message))
+            if (sendAttempted || looksAmbiguous(e.message)) {
+                throw AmbiguousSendException(PrivacyRedactor.safeError(e))
             }
             throw RuntimeException(PrivacyRedactor.safeError(e))
         } finally {

@@ -17,7 +17,7 @@
 - [ ] تست Golden Set واقعی: ۱۰۰ ایمیل نمونه بینامشده، **۰ عدد/ادعای جعلی** — فعلاً Golden Set **مصنوعی** (`GoldenSetTest`)؛ نمونه real در مخزن قرار نمیگیرد
 - [x] تست واحد «فقط `APPROVED/QUEUED` قابل ارسال است» (`MessageStateTest`) و باطلشدن approval هنگام ویرایش (`demote`)
 - [ ] تست **انتهایهانتهای** «۰ ایمیل بدون تأیید انسان» روی دستگاه/امولاتور
-- [x] منطق idempotency (UUID پایدار، `duplicate_parameter` = موفقیت، `UNCERTAIN` بدون retry) — تست واحد `MessageStateTest`
+- [x] منطق idempotency در Brevo (UUID پایدار، پاسخ دقیق `duplicate_parameter`، پنجرهٔ TTL محدود)؛ در SMTP، `Message-ID` فقط برای threading است و deduplication را تضمین نمی‌کند؛ نتیجهٔ مبهم بدون retry به `UNCERTAIN` می‌رود.
 - [ ] تست شبیهسازی شبکه قابل اطمینان (timeout → دقیقاً ۰ ارسال تکراری) با FakeBrevo/MockWebServer
 - [ ] تست یکپارچه لغو صف و تغییر approval هم‌زمان با آماده‌سازی پیوست و در مرز provider call
 - [x] فقط ۲ فایل trial دوصفحهای (`_fa` + انگلیسی)؛ `%PDF`، `pages==2` و نامها روی بایتهای واقعی (`AttachmentGuard`)
@@ -28,7 +28,8 @@
 - [ ] تست prompt-injection: دستورهای جاسازی‌شده در PDF، sidecar، You.com، قالب مرجع و متن پاسخ مشتری باید صرفاً داده تلقی و نادیده گرفته شوند
 - [x] خط opt-out و `Re:/Fwd:` جعلی/فوریت ساختگی توسط `QualityGate` مسدودند (تست واحد)
 - [x] فهرست عدم ارسال در صف و دوباره بلافاصله پیش از درخواست provider بررسی می‌شود (`SendEngine` + `SendPreflightGuard`)
-- [ ] تست race-condition: افزودن opt-out یا ویرایش approval در زمان پردازش PDF و درست پیش از provider call
+- [x] تست واحد snapshot/preflight: تغییر متن، موضوع، شواهد یا پیوست در آخرین gate ارسال باید fail-closed شود (`MessageStateTest`).
+- [ ] تست end-to-end روی دستگاه/امولاتور برای race-condition واقعی بین ویرایش/opt-out/cancel و آغاز provider call
 - [x] هیچ ادعای «تضمین رسیدن به اینباکس»، مهلت ساختگی، تخفیف یا تهدید در پرامپت/متن نمونه نیست
 
 ## ۲. پایداری (P0)

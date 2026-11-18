@@ -1,6 +1,5 @@
 package ir.salisec.autosender.ai
 
-import ir.salisec.autosender.data.AggregateStats
 import ir.salisec.autosender.data.PdfDoc
 import ir.salisec.autosender.data.ReportBundle
 import ir.salisec.autosender.data.ReportData
@@ -70,10 +69,9 @@ class GoldenSetTest {
     @Test
     fun oneHundredSyntheticEmailsPassGroundingAndComplianceChecks() {
         val settings = Settings()
-        val aggregate = AggregateStats(cases.size, cases.map { it.score }.average().toInt())
         var checked = 0
         cases.forEach { c ->
-            val allowed = QualityGate.allowedNumbers(settings, evidence(c), aggregate)
+            val allowed = QualityGate.allowedNumbers(evidence(c))
             repeat(5) { variant ->
                 val draft = copy(c, variant)
                 val report = QualityGate.validate(draft, settings, allowed)
@@ -99,7 +97,7 @@ class GoldenSetTest {
     fun negativeControl_anInventedClaimIsAlwaysBlocked() {
         val settings = Settings()
         val c = cases.first()
-        val allowed = QualityGate.allowedNumbers(settings, evidence(c), null)
+        val allowed = QualityGate.allowedNumbers(evidence(c))
         val tampered = copy(c).copy(body = copy(c).body + " نرخ تبدیل ما ۸۷ درصد است.")
         val report = QualityGate.validate(tampered, settings, allowed)
         assertFalse(report.passed)

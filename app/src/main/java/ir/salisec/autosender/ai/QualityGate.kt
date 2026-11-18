@@ -1,11 +1,10 @@
 package ir.salisec.autosender.ai
 
-import ir.salisec.autosender.data.AggregateStats
 import ir.salisec.autosender.data.ReportBundle
 import ir.salisec.autosender.data.Settings
 
 /** Enforces the agreed red lines BEFORE a human is allowed to approve an email:
- *  - no invented number or claim (every digit must exist in the real report pack)
+ *  - no invented numerical claim (facts must be grounded in the target report; identifiers and fixed footer/signature are excluded)
  *  - no fake urgency / fake deadline / threat / hype
  *  - no spam-evasion tricks, no deceptive subject, no fake headers
  *  - one low-friction CTA + a polite opt-out line
@@ -30,39 +29,31 @@ object QualityGate {
         "SALISECURE", "SALIBUSSINESS", "IP", "DNS", "WAF", "CVE", "PDF"
     )
 
-    private val numberRegex = Regex("""[0-9]+(?:[.,/][0-9]+)?""")
+    private val numberRegex = Regex("""[0-9]+(?:[.,][0-9]+)?""")
+    private val scoreDenominatorRegex = Regex("""([0-9]+(?:[.,][0-9]+)?)\s*(?:/|از)\s*100\b""")
     private val capsRegex = Regex("""[A-Z]{4,}""")
 
-    /** Digits that are legitimately available to the copywriter. */
-    fun allowedNumbers(
-        s: Settings,
-        bundle: ReportBundle?,
-        aggregate: AggregateStats?,
-        previousBody: String? = null,
-        contactName: String? = null,
-        domain: String? = null,
-        email: String? = null
-    ): Set<String> {
-        val out = mutableSetOf("100", "0", "1", "2")
-        bundle?.let {
-            out.addAll(numbers(it.allText))
-            it.data?.let { d ->
-                listOf(d.score, d.findings, d.critical, d.high, d.medium, d.low, d.subdomains)
-                    .filterNotNull().forEach { v -> out.add(v.toString()) }
-                d.freeFindingCvss?.let { out.addAll(numbers(it)) }
-                d.scanId?.let { out.addAll(numbers(it)) }
-            }
+    /**
+     * Numeric allow-list derived exclusively from the current target's evidence pack.
+     * Campaign aggregates, recipient metadata, signatures, previous drafts and customer
+     * replies are context, not evidence for factual claims in this recipient's email.
+     */
+    fun allowedNumbers(bundle: ReportBundle?): Set<String> {
+        if (bundle == null) return emptySet()
+
+        val out = mutableSetOf<String>()
+        // Only readable PDF body text and parsed numeric report fields count as evidence.
+        // Domain identifiers, sidecar IDs, file metadata and recipient metadata do not.
+        val readablePdfText = normalizeDigits(bundle.pdfs.filter { it.readOk }.joinToString("\n") { it.text })
+        // A score denominator is a format constant, not a free-standing report fact.
+        val pdfTextWithoutScoreDenominators = scoreDenominatorRegex.replace(readablePdfText) { it.groupValues[1] }
+        out.addAll(numbers(pdfTextWithoutScoreDenominators))
+        bundle.data?.let { d ->
+            listOf(d.score, d.findings, d.critical, d.high, d.medium, d.low, d.subdomains)
+                .filterNotNull()
+                .forEach { out.add(it.toString()) }
+            d.freeFindingCvss?.let { out.addAll(numbers(it)) }
         }
-        aggregate?.let { out.add(it.count.toString()); out.add(it.average.toString()) }
-        out.addAll(numbers(s.signature))
-        out.addAll(numbers(s.fromName))
-        out.addAll(numbers(s.fromEmail))
-        out.addAll(numbers(s.replyTo))
-        out.addAll(numbers(s.unsubscribeFooter))
-        contactName?.let { out.addAll(numbers(it)) }
-        domain?.let { out.addAll(numbers(it)) }
-        email?.let { out.addAll(numbers(it)) }
-        previousBody?.let { out.addAll(numbers(it)) }
         return out
     }
 
@@ -71,7 +62,9 @@ object QualityGate {
         result: AiResult,
         s: Settings,
         allowed: Set<String>,
-        isFollowUp: Boolean = false
+        isFollowUp: Boolean = false,
+        nonClaimIdentifiers: Set<String> = emptySet(),
+        scoreValue: String? = null
     ): QualityReport {
         val all = listOf(result.subject, result.preheader, result.body, result.cta).joinToString("\n")
         val lower = normalizeDigits(all).lowercase()
@@ -88,7 +81,25 @@ object QualityGate {
             blockers.add("موضوع جعلی Re:/Fwd: ممنوع است")
         }
 
-        val used = numbers(all)
+        // Domains/emails and deterministic local signature/footer are identifiers, not numeric claims.
+        var numericClaimText = all
+        s.signature.trim().takeIf { it.isNotBlank() }?.let { numericClaimText = numericClaimText.replace(it, "") }
+        s.unsubscribeFooter.trim().takeIf { it.isNotBlank() }?.let { numericClaimText = numericClaimText.replace(it, "") }
+        nonClaimIdentifiers.filter { it.isNotBlank() }.forEach {
+            numericClaimText = numericClaimText.replace(it, "", ignoreCase = true)
+        }
+        val normalizedNumericClaimText = normalizeDigits(numericClaimText)
+        val scoreNumber = scoreValue?.let { normalizeDigits(it) }
+        // Remove only the exact, evidence-backed score denominator occurrence.
+        // A separate claim such as "100 customers" must still fail the numeric gate.
+        val numericClaimsWithoutGroundedDenominator = if (scoreNumber == null) {
+            normalizedNumericClaimText
+        } else {
+            scoreDenominatorRegex.replace(normalizedNumericClaimText) { match ->
+                if (match.groupValues[1] == scoreNumber) match.groupValues[1] else match.value
+            }
+        }
+        val used = numbers(numericClaimsWithoutGroundedDenominator)
         val invented = used.filter { it !in allowed }
         if (invented.isNotEmpty()) {
             blockers.add("عدد/رقمی در متن هست که در گزارش واقعی وجود ندارد: " + invented.take(6).joinToString("، "))
@@ -155,16 +166,8 @@ object QualityGate {
         )
     }
 
-    fun numbers(text: String): Set<String> {
-        val n = normalizeDigits(text)
-        val out = mutableSetOf<String>()
-        for (m in numberRegex.findAll(n)) {
-            val v = m.value
-            out.add(v)
-            v.split('.', ',', '/').filter { it.isNotEmpty() }.forEach { out.add(it) }
-        }
-        return out
-    }
+    fun numbers(text: String): Set<String> =
+        numberRegex.findAll(normalizeDigits(text)).map { it.value }.toSet()
 
     private fun normalizeDigits(text: String): String {
         val sb = StringBuilder(text.length)
@@ -175,6 +178,7 @@ object QualityGate {
                     '۵' -> '5'; '۶' -> '6'; '۷' -> '7'; '۸' -> '8'; '۹' -> '9'
                     '٠' -> '0'; '١' -> '1'; '٢' -> '2'; '٣' -> '3'; '٤' -> '4'
                     '٥' -> '5'; '٦' -> '6'; '٧' -> '7'; '٨' -> '8'; '٩' -> '9'
+                    '\u066B' -> '.'; '\u066C' -> ','
                     else -> ch
                 }
             )

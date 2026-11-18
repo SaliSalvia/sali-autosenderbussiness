@@ -1,5 +1,7 @@
 package ir.salisec.autosender.send
 
+import ir.salisec.autosender.data.MessageEntity
+
 /**
  * Pure, unit-tested state machine for the delivery queue.
  * DRAFT → APPROVED → QUEUED → SENDING → SENT / FAILED / SKIPPED / UNCERTAIN
@@ -58,8 +60,53 @@ object MessageState {
 }
 
 
+/**
+ * Linearizes cancellation against the decision to begin an external provider request.
+ * A cancellation before tryBeginProviderCall() prevents the request; cancellation after
+ * it means the request may be in flight and must be settled as UNCERTAIN if interrupted.
+ */
+class ProviderStartGate {
+    private val lock = Any()
+
+    @Volatile
+    private var cancellationRequested = false
+
+    fun reset() = synchronized(lock) { cancellationRequested = false }
+
+    fun cancel() = synchronized(lock) { cancellationRequested = true }
+
+    fun isCancellationRequested(): Boolean = cancellationRequested
+
+    fun tryBeginProviderCall(): Boolean = synchronized(lock) { !cancellationRequested }
+}
+
 /** Final, fail-closed check immediately before handing a message to the mail provider. */
 object SendPreflightGuard {
+    /**
+     * Compares every approved, send-relevant field with the latest Room row.
+     * Operational metadata (attempts, diagnostics and timestamps) is deliberately ignored.
+     */
+    fun matchesApprovedSnapshot(approved: MessageEntity, latest: MessageEntity?): Boolean {
+        if (latest == null) return false
+        return latest.messageUuid == approved.messageUuid &&
+            latest.email.equals(approved.email, ignoreCase = true) &&
+            latest.name == approved.name &&
+            latest.domain.equals(approved.domain, ignoreCase = true) &&
+            latest.subject == approved.subject &&
+            latest.preheader == approved.preheader &&
+            latest.body == approved.body &&
+            latest.evidenceHash == approved.evidenceHash &&
+            latest.qualityOk && approved.qualityOk &&
+            latest.pdfPaths == approved.pdfPaths &&
+            latest.attachmentNames == approved.attachmentNames &&
+            latest.attachmentPages == approved.attachmentPages &&
+            latest.attachmentSha256 == approved.attachmentSha256 &&
+            latest.isFollowUp == approved.isFollowUp &&
+            latest.followUpStep == approved.followUpStep &&
+            latest.lastReplySnippet == approved.lastReplySnippet &&
+            latest.threadReferences == approved.threadReferences
+    }
+
     fun canSubmit(
         cancelRequested: Boolean,
         isSuppressed: Boolean,

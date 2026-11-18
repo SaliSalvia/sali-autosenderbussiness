@@ -26,9 +26,11 @@ import ir.salisec.autosender.mail.AmbiguousSendException
 import ir.salisec.autosender.mail.BrevoSender
 import ir.salisec.autosender.mail.DuplicateSendException
 import ir.salisec.autosender.mail.SmtpSender
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -68,8 +70,8 @@ sealed class QueueRunOutcome {
  * Queue processor. Sends ONLY human-approved emails, paced, with:
  *  - WorkManager-backed persistent execution + network constraint + business hours window,
  *  - an atomic claim/lease (a killed worker cannot re-send an in-flight item),
- *  - one stable UUID per message (provider-side idempotency),
- *  - UNCERTAIN instead of auto-retry when a response is lost,
+ *  - one stable UUID per message (Brevo idempotency; SMTP Message-ID is for threading only),
+ *  - UNCERTAIN instead of auto-retry for ambiguous provider/SMTP outcomes,
  *  - a defence-in-depth check on opt-out, grounding and real PDF bytes,
  *  - providerMessageId & full References chain persistence for follow-up threading,
  *  - automatic followUpAt cadence scheduling (Day+2 / Day+7),
@@ -122,8 +124,7 @@ class SendEngine(
         _queueVersion.value = _queueVersion.value + 1L
     }
 
-    @Volatile
-    private var cancelRequested = false
+    private val providerStartGate = ProviderStartGate()
 
     private val brevo = BrevoSender(ok)
     private val smtp = SmtpSender()
@@ -145,7 +146,7 @@ class SendEngine(
     /** Enqueues resilient WorkManager queue execution (with network constraint & business-hours scheduling). */
     fun enqueueWork(initialDelayMs: Long = 0L) {
         if (_state.value.running) return
-        cancelRequested = false
+        providerStartGate.reset()
         val s = prefs.load()
         val effectiveDelay = if (initialDelayMs > 0L) initialDelayMs
         else if (!isWithinBusinessHours(s)) delayUntilNextBusinessHourMs(s) else 0L
@@ -233,7 +234,7 @@ class SendEngine(
 
     fun start() {
         if (job?.isActive == true) return
-        cancelRequested = false
+        providerStartGate.reset()
         job = scope.launch {
             runQueue()
         }
@@ -287,7 +288,7 @@ class SendEngine(
 
         var outcome: QueueRunOutcome = QueueRunOutcome.Completed
 
-        while (isActive && !cancelRequested) {
+        while (isActive && !providerStartGate.isCancellationRequested()) {
             val now = System.currentTimeMillis()
             val settings = prefs.load()
             if (!isWithinBusinessHours(settings, now)) {
@@ -309,7 +310,7 @@ class SendEngine(
             val candidate = db.messageDao().nextSendable(now) ?: break
             if (_state.value.paused) {
                 waitWhilePaused()
-                if (cancelRequested) break
+                if (providerStartGate.isCancellationRequested()) break
             }
             if (sentToday >= settings.dailyCap) {
                 log(candidate, false, "سقف روزانه رسیده است؛ صف متوقف شد")
@@ -446,7 +447,7 @@ class SendEngine(
             // Re-check cancellation, approval state and opt-out immediately before the
             // provider call. Evidence/PDF verification above may take a meaningful amount
             // of time, during which the user can cancel or add a suppression entry.
-            if (cancelRequested) {
+            if (providerStartGate.isCancellationRequested()) {
                 db.messageDao().releaseClaimBeforeSend(
                     msg.id,
                     OWNER,
@@ -457,19 +458,7 @@ class SendEngine(
             }
 
             val latest = db.messageDao().byId(msg.id) ?: continue
-            val stillApproved =
-                latest.messageUuid == uuid &&
-                    latest.email.equals(msg.email, ignoreCase = true) &&
-                    latest.domain.equals(msg.domain, ignoreCase = true) &&
-                    latest.subject == msg.subject &&
-                    latest.preheader == msg.preheader &&
-                    latest.body == msg.body &&
-                    latest.evidenceHash == msg.evidenceHash &&
-                    latest.qualityOk &&
-                    latest.pdfPaths == msg.pdfPaths &&
-                    latest.attachmentNames == msg.attachmentNames &&
-                    latest.attachmentPages == msg.attachmentPages &&
-                    latest.attachmentSha256 == msg.attachmentSha256
+            val stillApproved = SendPreflightGuard.matchesApprovedSnapshot(msg, latest)
             val suppressedNow = prefs.isSuppressed(msg.email, msg.domain)
             if (suppressedNow) {
                 settle(msg, MessageState.SKIPPED, "در فهرست عدم ارسال (opt-out)")
@@ -479,7 +468,7 @@ class SendEngine(
                 continue
             }
             if (!SendPreflightGuard.canSubmit(
-                    cancelRequested = cancelRequested,
+                    cancelRequested = providerStartGate.isCancellationRequested(),
                     isSuppressed = suppressedNow,
                     approvalStillCurrent = stillApproved,
                     status = latest.status,
@@ -503,6 +492,20 @@ class SendEngine(
                 log(msg, false, "ارسال متوقف شد: تنظیمات فرستنده دیگر کامل نیست")
                 continue
             }
+            // This synchronized gate is the cancellation/send linearization point.
+            // A cancellation before it releases the claim; after it, delivery may be ambiguous.
+            if (!providerStartGate.tryBeginProviderCall()) {
+                withContext(NonCancellable) {
+                    db.messageDao().releaseClaimBeforeSend(
+                        msg.id,
+                        OWNER,
+                        "ارسال پیش از شروع درخواست به ارائه‌دهنده لغو شد؛ پیام در صف باقی ماند",
+                        System.currentTimeMillis()
+                    )
+                }
+                break
+            }
+
             val attempts = msg.attempts + 1
             try {
                 val sender = if (sendSettings.sendMode == "BREVO_API") brevo else smtp
@@ -526,6 +529,21 @@ class SendEngine(
                 sentToday++
                 _state.value = _state.value.copy(sent = sent, sentToday = sentToday)
                 log(msg, true, "ارسال شد | پیوست: " + names.joinToString(" + "))
+            } catch (e: CancellationException) {
+                // The provider may have accepted the request before cancellation interrupted the response.
+                // Never re-queue this message automatically; a human must reconcile delivery.
+                withContext(NonCancellable) {
+                    settle(
+                        msg,
+                        MessageState.UNCERTAIN,
+                        "لغو حین ارسال؛ ممکن است ارائه‌دهنده پیام را پذیرفته باشد، بررسی دستی لازم است",
+                        attempts = attempts
+                    )
+                    failed++
+                    _state.value = _state.value.copy(failed = failed)
+                    log(msg, false, "ارسال هنگام لغو متوقف شد؛ نتیجه نامشخص است و retry خودکار انجام نمی‌شود")
+                }
+                throw e
             } catch (e: DuplicateSendException) {
                 val nextFollowUpAt = computeNextFollowUpAt(msg, sendSettings, System.currentTimeMillis())
                 settle(msg, MessageState.SENT, null, sent = true, attempts = attempts, followUpAt = nextFollowUpAt)
@@ -549,15 +567,15 @@ class SendEngine(
             }
 
             val next = db.messageDao().nextSendable(System.currentTimeMillis())
-            if (next != null && !cancelRequested) {
+            if (next != null && !providerStartGate.isCancellationRequested()) {
                 val delayMs = (settings.delaySeconds + (0..maxOf(0, settings.jitterSeconds)).random()) * 1000L
                 _state.value = _state.value.copy(waitingUntil = System.currentTimeMillis() + delayMs)
                 var waited = 0L
-                while (waited < delayMs && !cancelRequested) {
+                while (waited < delayMs && !providerStartGate.isCancellationRequested()) {
                     if (_state.value.paused) {
                         _state.value = _state.value.copy(waitingUntil = null)
                         waitWhilePaused()
-                        if (cancelRequested) break
+                        if (providerStartGate.isCancellationRequested()) break
                     }
                     delay(1000)
                     waited += 1000
@@ -666,15 +684,21 @@ class SendEngine(
     }
 
     private suspend fun waitWhilePaused() {
-        while (_state.value.paused && !cancelRequested) delay(700)
+        while (_state.value.paused && !providerStartGate.isCancellationRequested()) delay(700)
     }
 
     fun pause() { _state.value = _state.value.copy(paused = true) }
     fun resume() { _state.value = _state.value.copy(paused = false) }
     fun cancel() {
-        cancelRequested = true
+        providerStartGate.cancel()
+        val activeRun = _state.value.running
         _state.value = _state.value.copy(paused = false, waitingForBusinessHours = false, waitingUntil = null)
-        WorkManager.getInstance(appContext).cancelUniqueWork(UNIQUE_WORK_NAME)
+        // Let an active provider call finish or report an ambiguous result. Cancelling the
+        // WorkManager coroutine here could interrupt SMTP/HTTP after acceptance and lose its response.
+        // A scheduled-but-not-running request can still be removed immediately.
+        if (!activeRun) {
+            WorkManager.getInstance(appContext).cancelUniqueWork(UNIQUE_WORK_NAME)
+        }
     }
 
     private suspend fun log(msg: MessageEntity, ok: Boolean, text: String) {
