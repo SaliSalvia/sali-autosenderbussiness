@@ -30,6 +30,7 @@ object QualityGate {
     )
 
     private val numberRegex = Regex("""[0-9]+(?:[.,][0-9]+)?""")
+    private val scoreDenominatorRegex = Regex("""([0-9]+(?:[.,][0-9]+)?)\s*(?:/|از)\s*100\b""")
     private val capsRegex = Regex("""[A-Z]{4,}""")
 
     /**
@@ -43,12 +44,14 @@ object QualityGate {
         val out = mutableSetOf<String>()
         // Only readable PDF body text and parsed numeric report fields count as evidence.
         // Domain identifiers, sidecar IDs, file metadata and recipient metadata do not.
-        out.addAll(numbers(bundle.pdfs.filter { it.readOk }.joinToString("\n") { it.text }))
+        val readablePdfText = normalizeDigits(bundle.pdfs.filter { it.readOk }.joinToString("\n") { it.text })
+        // A score denominator is a format constant, not a free-standing report fact.
+        val pdfTextWithoutScoreDenominators = scoreDenominatorRegex.replace(readablePdfText) { it.groupValues[1] }
+        out.addAll(numbers(pdfTextWithoutScoreDenominators))
         bundle.data?.let { d ->
             listOf(d.score, d.findings, d.critical, d.high, d.medium, d.low, d.subdomains)
                 .filterNotNull()
                 .forEach { out.add(it.toString()) }
-            if (d.score != null) out.add("100")
             d.freeFindingCvss?.let { out.addAll(numbers(it)) }
         }
         return out
@@ -60,7 +63,8 @@ object QualityGate {
         s: Settings,
         allowed: Set<String>,
         isFollowUp: Boolean = false,
-        nonClaimIdentifiers: Set<String> = emptySet()
+        nonClaimIdentifiers: Set<String> = emptySet(),
+        scoreValue: String? = null
     ): QualityReport {
         val all = listOf(result.subject, result.preheader, result.body, result.cta).joinToString("\n")
         val lower = normalizeDigits(all).lowercase()
@@ -84,8 +88,15 @@ object QualityGate {
         nonClaimIdentifiers.filter { it.isNotBlank() }.forEach {
             numericClaimText = numericClaimText.replace(it, "", ignoreCase = true)
         }
-        val used = numbers(numericClaimText)
-        val invented = used.filter { it !in allowed }
+        val normalizedNumericClaimText = normalizeDigits(numericClaimText)
+        val scoreDenominatorIsGrounded = scoreValue?.let { expected ->
+            val normalizedScore = normalizeDigits(expected)
+            scoreDenominatorRegex.findAll(normalizedNumericClaimText).any {
+                it.groupValues[1] == normalizedScore
+            }
+        } ?: false
+        val used = numbers(normalizedNumericClaimText)
+        val invented = used.filter { it !in allowed && !(it == "100" && scoreDenominatorIsGrounded) }
         if (invented.isNotEmpty()) {
             blockers.add("عدد/رقمی در متن هست که در گزارش واقعی وجود ندارد: " + invented.take(6).joinToString("، "))
         }
