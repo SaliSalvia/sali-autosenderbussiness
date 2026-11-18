@@ -26,7 +26,7 @@ data class ReportBundle(
     val sidecarText: String? = null,
     val warnings: List<String> = emptyList()
 ) {
-    /** The up-to-2 newest readable PDFs in the folder (e.g. trial_fa + trial). */
+    /** The verified two-page Persian/English trial pair; empty when the folder cannot prove a valid pair. */
     val trialAttachments: List<PdfDoc> get() = AttachmentPolicy.selectTrialPair(pdfs)
 
     val allText: String get() = buildString {
@@ -112,8 +112,7 @@ data class ReportBundle(
     }
 }
 
-/** Selects the 2 newest PDFs in a domain folder (matching e.g. `*_trial_fa.pdf` and `*_trial.pdf`,
- *  or any 2 newest PDFs when >2 PDFs exist in the folder). */
+/** Enforces the single attachment policy for the bilingual two-page trial pack. */
 object AttachmentPolicy {
     private val trialMarkers = listOf(
         "trial", "2page", "2-page", "2_page", "two-page", "two_page",
