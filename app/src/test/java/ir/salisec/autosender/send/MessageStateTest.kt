@@ -103,6 +103,7 @@ class MessageStateTest {
         val operationalOnlyChange = approved.copy(attempts = 1, lastError = "diagnostic", updatedAt = 1234L)
         assertTrue(SendPreflightGuard.matchesApprovedSnapshot(approved, operationalOnlyChange))
         assertFalse(SendPreflightGuard.matchesApprovedSnapshot(approved, null))
+        assertFalse(SendPreflightGuard.matchesApprovedSnapshot(approved.copy(qualityOk = false), approved.copy(qualityOk = false)))
 
         val editedRows = listOf(
             approved.copy(body = "متن ویرایش‌شده"),
@@ -114,8 +115,10 @@ class MessageStateTest {
             approved.copy(attachmentPages = "3||2"),
             approved.copy(attachmentSha256 = "e".repeat(64)),
             approved.copy(email = "other@example.com"),
+            approved.copy(name = "Different Contact"),
             approved.copy(domain = "other.example"),
             approved.copy(qualityOk = false),
+            approved.copy(lastReplySnippet = "New customer reply"),
             approved.copy(isFollowUp = true),
             approved.copy(followUpStep = 1),
             approved.copy(threadReferences = "<parent@example.com>")
