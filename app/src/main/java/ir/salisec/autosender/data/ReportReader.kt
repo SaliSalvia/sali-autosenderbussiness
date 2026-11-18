@@ -315,9 +315,9 @@ object ReportReader {
     internal fun parseSidecar(domain: String, text: String): ReportData? {
         return try {
             val o = JSONObject(text)
-            val expectedDomain = domain.trim().removePrefix("www.").trimEnd('.')
+            val expectedDomain = domain.trim().lowercase().removePrefix("www.").trimEnd('.')
             val declaredDomain = o.optString("domain", expectedDomain)
-                .trim().removePrefix("www.").trimEnd('.')
+                .trim().lowercase().removePrefix("www.").trimEnd('.')
             if (declaredDomain.isBlank() || !declaredDomain.equals(expectedDomain, ignoreCase = true)) {
                 null
             } else ReportData(
