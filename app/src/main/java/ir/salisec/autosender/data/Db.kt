@@ -22,7 +22,7 @@ data class MessageEntity(
     val subject: String = "",
     val body: String = "",
     val preheader: String = "",
-    /** Up to 2 newest PDF URIs, separated by "||". */
+    /** Verified Persian/English two-page trial PDF URIs, separated by "||". */
     val pdfPaths: String = "",
     /** Exact file names of the attached PDFs. */
     val attachmentNames: String = "",

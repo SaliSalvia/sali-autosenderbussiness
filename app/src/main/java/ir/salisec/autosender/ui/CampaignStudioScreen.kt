@@ -1222,7 +1222,7 @@ private fun DraftReviewCard(
 
             AnimatedVisibility(visible = expanded) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Attached 2 newest PDFs preview (tappable to open in-app PDF viewer)
+                    // Verified Persian/English two-page trial pair preview (tappable to open in-app PDF viewer)
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)

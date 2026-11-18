@@ -10,8 +10,8 @@ import org.json.JSONObject
 /** Reads the user-selected "sitest" folder (SAF).
  *
  *  Fast folder indexing + automatic matching by email/domain.
- *  Picks the 2 newest PDFs in each domain folder for attachment, while reading
- *  recent PDFs + sidecar JSON for grounded AI marketing copy. */
+ *  Parses at most six PDFs per domain, prioritizing a filename-matched trial pair
+ *  so older eligible attachments are not hidden by newer unrelated reports. */
 object ReportReader {
 
     private val freeEmailDomains = setOf(
@@ -130,7 +130,9 @@ object ReportReader {
     fun jsonIn(folder: DocumentFile): DocumentFile? =
         folder.listFiles().firstOrNull { it.isFile && it.name?.lowercase()?.endsWith(".json") == true }
 
-    /** Main entry: read newest PDFs (up to 6 for speed, always including the 2 newest attached PDFs) + optional JSON sidecar.
+    private const val MAX_PDFS_FOR_AI = 6
+
+    /** Main entry: parse at most six PDFs, prioritizing a matching trial pair, plus an optional JSON sidecar.
      *  Uses Room [pdfCacheDao] when available so unchanged PDFs are not re-parsed by PDFBox. */
     suspend fun readBundle(
         context: Context,
@@ -152,7 +154,20 @@ object ReportReader {
         }
 
         val allPdfFiles = pdfsFrom(children)
-        val toParse = allPdfFiles.take(6)
+        val metadata = allPdfFiles.map { file ->
+            PdfDoc(
+                name = file.name ?: "report.pdf",
+                uri = file.uri.toString(),
+                lastModified = file.lastModified(),
+                sizeBytes = file.length()
+            )
+        }
+        val prioritizedUris = AttachmentPolicy.selectTrialCandidates(metadata).map { it.uri }.toSet()
+        val prioritizedTrialFiles = allPdfFiles.filter { it.uri.toString() in prioritizedUris }
+        val remainingFiles = allPdfFiles.filterNot { it.uri.toString() in prioritizedUris }
+        val toParse = (prioritizedTrialFiles + remainingFiles)
+            .distinctBy { it.uri.toString() }
+            .take(MAX_PDFS_FOR_AI)
 
         for (f in toParse) {
             val name = f.name ?: "report.pdf"
@@ -236,12 +251,12 @@ object ReportReader {
         if (allPdfFiles.isEmpty()) {
             warnings.add("هیچ PDF در پوشه ${folder.name} پیدا نشد")
         }
-        val selected = AttachmentPolicy.selectNewestPair(docs)
-        if (selected.size == 1 && allPdfFiles.size == 1) {
-            warnings.add("فقط ۱ فایل PDF در پوشه وجود دارد؛ همان ۱ فایل پیوست می‌شود")
+        val selected = AttachmentPolicy.selectTrialPair(docs)
+        if (allPdfFiles.size > MAX_PDFS_FOR_AI) {
+            warnings.add("از ${allPdfFiles.size} فایل PDF، حداکثر ${MAX_PDFS_FOR_AI} فایل برای تحلیل خوانده شد؛ جفت trial در اولویت قرار گرفت")
         }
-        if (allPdfFiles.size > 2) {
-            warnings.add("از ${allPdfFiles.size} فایل PDF موجود، ۲ مورد جدیدترین برای پیوست انتخاب شدند")
+        if (selected.isEmpty() && allPdfFiles.isNotEmpty()) {
+            warnings.add("جفت معتبر فارسی/انگلیسی trial با دقیقاً دو صفحه و قابلیت خواندن پیدا نشد؛ هیچ PDFای پیوست نخواهد شد")
         }
 
         return ReportBundle(
@@ -300,7 +315,7 @@ object ReportReader {
     private fun jStr(o: JSONObject, key: String): String? =
         o.optString(key, "").trim().takeIf { it.isNotBlank() && it != "null" }
 
-    /** Extract real facts from the text of ALL PDFs (never invents numbers). */
+    /** Extract real facts from the parsed PDF subset (never invents numbers). */
     fun parsePdfFacts(domain: String, docs: List<PdfDoc>): ReportData? {
         val combined = docs.filter { it.readOk }.joinToString("\n") { it.text }
         if (combined.isBlank()) return null

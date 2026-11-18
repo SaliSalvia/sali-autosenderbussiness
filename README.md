@@ -45,8 +45,8 @@
 - Brevo API (پیشفرض) یا SMTP اختصاصی؛ IMAP داخل اپ برای پاسخها؛ درخواست حذف بلافاصله ثبت میشود.
 
 ## قانون طلایی PDFها
-- **AI تمام PDFهای پوشه هر دامنه را میخواند** تا پیام را طراحی کند.
-- **فقط و فقط دو نسخه trial دوصفحهای (فارسی + انگلیسی) پیوست و ارسال میشوند**.
+- **حداکثر ۶ PDF از هر پوشه** برای تحلیل خوانده میشود؛ اگر جفت trial معتبر قدیمی‌تر باشد، پیش از اعمال سقف در اولویت پردازش قرار میگیرد.
+- **فقط و فقط یک جفت trial دوصفحه‌ای هم‌خانواده (فارسی + انگلیسی)** پس از تأیید خوانایی و تعداد صفحات پیوست و ارسال میشود؛ در نبود جفت معتبر، هیچ PDFای ارسال نمیشود.
 - پیش از هر network call، `AttachmentGuard` امضای `%PDF-`، تعداد صفحات (`2`)، نام trial،
   ≤ ۴MB برای هر فایل و ≤ ۲۰MB برای کل ایمیل را روی **بایتهای واقعی** چک میکند.
 - نامگذاری پیشنهادی: `..._trial_fa.pdf` و `..._trial.pdf`؛ گزارش کامل `..._full.pdf` هرگز پیوست نمیشود.
@@ -86,3 +86,8 @@
 ## نکته حقوقی
 ارسال فقط به سرنخهایی که رابطه تجاری / رضایت دارند؛ دامنه فرستنده باید SPF/DKIM/DMARC داشته باشد؛
 unsubscribe در پاسخ فورا در فهرست عدم ارسال ثبت میشود. جزئیات: [`PRIVACY.md`](PRIVACY.md).
+
+
+## Engineering hardening
+
+The current phase 1–2 hardening work, including strict bilingual trial-PDF attachment validation, full evidence SHA-256, campaign persistence repository, regression tests, and CI coverage reporting, is tracked in [docs/PHASE_1_2_EXECUTION.md](docs/PHASE_1_2_EXECUTION.md).

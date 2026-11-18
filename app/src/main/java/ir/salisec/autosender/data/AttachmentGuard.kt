@@ -10,14 +10,17 @@ object AttachmentGuard {
     const val MAX_TOTAL_BYTES = 20L * 1024L * 1024L
 
     fun validateNames(names: List<String>): String? {
-        if (names.isEmpty() || names.size > 2) {
-            return "تعداد پیوست ${names.size} است؛ حداکثر ۲ فایل PDF مجاز است"
+        if (names.size != 2) {
+            return "برای ارسال فقط جفت کامل PDF آزمایشی فارسی و انگلیسی مجاز است"
         }
 
         if (names.any { !it.trim().lowercase().endsWith(".pdf") }) {
             return "همهٔ پیوست‌ها باید PDF باشند"
         }
 
+        if (!AttachmentPolicy.isValidTrialPair(names)) {
+            return "پیوست‌ها باید دقیقاً شامل نسخهٔ آزمایشی فارسی و انگلیسی از یک گزارش باشند؛ گزارش کامل مجاز نیست"
+        }
         return null
     }
 
@@ -55,8 +58,8 @@ object AttachmentGuard {
                 return "فایل «${names[index]}» امضای PDF ندارد"
             }
 
-            if (bytes.size.toLong() >= perFileCap) {
-                return "حجم «${names[index]}» باید کمتر از ${perFileCap / 1024 / 1024} مگابایت باشد"
+            if (bytes.size.toLong() > perFileCap) {
+                return "حجم «${names[index]}» نباید از ${perFileCap / 1024 / 1024} مگابایت بیشتر باشد"
             }
 
             val approvedPageCount = approvedPages[index]
@@ -65,8 +68,11 @@ object AttachmentGuard {
             val actualPageCount = actualPages[index]
                 ?: return "تعداد صفحات واقعی «${names[index]}» قابل خواندن نیست"
 
-            if (approvedPageCount <= 0 || actualPageCount <= 0 || approvedPageCount != actualPageCount) {
-                return "تعداد صفحات «${names[index]}» تغییر کرده یا نامعتبر است؛ پیام را دوباره بررسی کنید"
+            if (approvedPageCount != 2 || actualPageCount != 2) {
+                return "فایل «${names[index]}» باید دقیقاً ۲ صفحه داشته باشد"
+            }
+            if (approvedPageCount != actualPageCount) {
+                return "تعداد صفحات «${names[index]}» تغییر کرده است؛ پیام را دوباره بررسی کنید"
             }
 
             val actualHash = sha256(payloads[index])
@@ -77,8 +83,8 @@ object AttachmentGuard {
             totalBytes += bytes.size
         }
 
-        if (totalBytes >= MAX_TOTAL_BYTES) {
-            return "حجم کل پیوست‌ها باید کمتر از ۲۰ مگابایت باشد"
+        if (totalBytes > MAX_TOTAL_BYTES) {
+            return "حجم کل پیوست‌ها نباید از ۲۰ مگابایت بیشتر باشد"
         }
 
         return null

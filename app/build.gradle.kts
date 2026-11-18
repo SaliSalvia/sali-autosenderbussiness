@@ -3,6 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.kapt")
+    id("jacoco")
 }
 
 android {
@@ -20,19 +21,9 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    signingConfigs {
-        create("debugConfig") {
-            storeFile = file("${rootDir}/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-        }
-    }
-
+    // Debug builds use the Android Gradle Plugin's standard per-user debug keystore.
+    // No developer-local debug.keystore is required in the repository or CI.
     buildTypes {
-        debug {
-            signingConfig = signingConfigs.getByName("debugConfig")
-        }
         release {
             // R8 is on so the release artifact is a real, shrunk build. Conservative
             // keep rules protect JavaMail / Room / PDFBox reflection (proguard-rules.pro).
@@ -109,4 +100,26 @@ dependencies {
 
     // Pure-JVM unit tests for domain logic. No emulator needed in CI.
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
+}
+
+tasks.register<JacocoReport>("jacocoTestReport") {
+    dependsOn("testDebugUnitTest")
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+    }
+    val excludes = listOf(
+        "**/ui/**", "**/MainActivity*", "**/App*",
+        "**/BuildConfig*", "**/R.class", "**/R$*.class"
+    )
+    classDirectories.setFrom(
+        files(fileTree(layout.buildDirectory.dir("tmp/kotlin-classes/debug")) {
+            exclude(excludes)
+        })
+    )
+    sourceDirectories.setFrom(files("src/main/java"))
+    executionData.setFrom(fileTree(layout.buildDirectory) {
+        include("jacoco/testDebugUnitTest.exec", "outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec")
+    })
 }

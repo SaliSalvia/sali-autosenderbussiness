@@ -8,8 +8,7 @@ import ir.salisec.autosender.ai.AiResult
 import ir.salisec.autosender.ai.Enricher
 import ir.salisec.autosender.ai.QualityReport
 import ir.salisec.autosender.data.AppDatabase
-import ir.salisec.autosender.data.CampaignEntity
-import ir.salisec.autosender.data.CampaignSnapshot
+import ir.salisec.autosender.data.CampaignRepository
 import ir.salisec.autosender.data.CampaignSnapshotData
 import ir.salisec.autosender.data.CompanyContext
 import ir.salisec.autosender.data.Contact
@@ -127,6 +126,7 @@ class App : Application() {
     lateinit var inbox: InboxClient
     lateinit var deliverability: DeliverabilityChecker
     lateinit var engine: SendEngine
+    lateinit var campaignRepository: CampaignRepository
     val session = CampaignSession()
     val ok: OkHttpClient = OkHttpClient()
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -143,11 +143,10 @@ class App : Application() {
         inbox = InboxClient()
         deliverability = DeliverabilityChecker(ok)
         engine = SendEngine(this, db, prefs, ok)
+        campaignRepository = CampaignRepository(db.campaignDao(), db.studioDraftDao())
 
-        val (saved, storedDrafts) = runBlocking(Dispatchers.IO) {
-            db.campaignDao().active() to db.studioDraftDao().all()
-        }
-        session.restore(CampaignSnapshot.decode(saved?.payload), storedDrafts)
+        val restored = runBlocking(Dispatchers.IO) { campaignRepository.restore() }
+        session.restore(restored.snapshot, restored.drafts.values.toList())
         persistCampaign()
     }
 
@@ -174,16 +173,15 @@ class App : Application() {
         )
         session.persistedDrafts.value = session.persistedDrafts.value + (item.key to entity)
         appScope.launch {
-            db.studioDraftDao().upsert(entity)
+            campaignRepository.saveDraft(entity)
         }
     }
 
     suspend fun clearAllData() = withContext(Dispatchers.IO) {
         db.messageDao().clearAll()
         db.logDao().clearAll()
-        db.campaignDao().clearAll()
+        campaignRepository.clear()
         db.companyCacheDao().clearAll()
-        db.studioDraftDao().clearAll()
         db.pdfCacheDao().clearAll()
         prefs.clear()
         enricher.clearCache()
@@ -200,16 +198,14 @@ class App : Application() {
                 session.selected,
                 session.contexts
             ) { domains, contacts, selected, contexts ->
-                CampaignSnapshot.encode(
+                CampaignSnapshotData(
                     domains = domains,
                     contacts = contacts.values.toList(),
                     selected = selected,
                     contexts = contexts.values.toList()
                 )
-            }.collect { json ->
-                db.campaignDao().upsert(
-                    CampaignEntity("active", json, System.currentTimeMillis())
-                )
+            }.collect { snapshot ->
+                campaignRepository.saveSnapshot(snapshot)
             }
         }
     }
