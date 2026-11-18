@@ -16,6 +16,15 @@ class AttachmentPolicyTest {
     private val olderScan = PdfDoc("2026-11-10_09-00_trial.pdf", "content://old", pages = 2, lastModified = 500L)
 
     @Test
+    fun filenameCandidatePairIsFoundBeforePageCountsAreKnown() {
+        val fa = newestFa.copy(pages = null)
+        val en = newestEn.copy(pages = null)
+        val candidates = AttachmentPolicy.selectTrialCandidates(listOf(olderExec, olderScan, en, fa))
+        assertEquals(setOf(fa.uri, en.uri), candidates.map { it.uri }.toSet())
+        assertTrue(AttachmentPolicy.selectTrialPair(candidates).isEmpty())
+    }
+
+    @Test
     fun selectsOnlyMatchingTwoPagePersianEnglishTrialPair() {
         val full = PdfDoc("2026-11-14_13-07_full_report.pdf", "content://full", pages = 18, lastModified = 2000L)
         val pair = AttachmentPolicy.selectTrialPair(listOf(olderScan, olderExec, full, newestEn, newestFa))
