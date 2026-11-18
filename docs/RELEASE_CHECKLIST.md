@@ -42,7 +42,7 @@
 - [x] [`PRIVACY.md`](../PRIVACY.md) (FA/EN) منتشر شد؛ موجودی داده و طرفهای سوم (hcnsec/You.com/Brevo/IMAP) درج شد
 - [x] [`SECURITY.md`](../SECURITY.md) و مسیر گزارش خصوصی موجود است
 - [x] «پاکسازی کامل دادههای اپ» داخل تنظیمات با دیالوگ تأیید: `messages` + `logs` + `campaigns` + prefs رمزنگاریشده + session پاک میشوند (`SettingsScreen` / `App.clearAllData`)
-- [ ] خطمشی نگهداری لاگ (حذف خودکار لاگهای قدیمیتر از N روز) هنوز اعمال نشده؛ حذف فایلهای exportشده بر عهده کاربر است
+- [x] نگهداری لاگ عملیاتی روی دستگاه حداکثر ۹۰ روز است؛ هنگام شروع اپ، رکوردهای قدیمی‌تر به‌صورت خودکار حذف می‌شوند (`LogRetentionPolicy`, `LogDao.deleteBefore`)؛ فایل‌های exportشده‌ای که کاربر خارج از اپ ذخیره کرده باید جداگانه حذف شوند
 - [ ] رضایت/رابطه تجاری بهازای هر مخاطب ثبت میشود؛ فرم Data Safety تکمیل شده
 - [ ] SPF / DKIM / DMARC دامنه فرستنده تأیید و تست شدهاند
 
@@ -51,7 +51,7 @@
 - [x] تست واحد منطق دامنه: ContactsParser / DomainValidator / QualityGate / AttachmentPolicy / AttachmentGuard / MessageState / PrivacyRedactor / GoldenSet
 - [ ] پوشش تست ≥ ۷۰٪ اندازهگیری شود؛ `detekt`/`ktlint` اضافه شود
 - [ ] `libs.versions.toml`؛ `kapt` → KSP؛ `security-crypto` پایدار
-- [x] `versionCode = 3` / `versionName = 2.0.0` و `CHANGELOG.md` همخواناند
+- [x] `versionCode = 4` / `versionName = 2.0.1` و `CHANGELOG.md` همخواناند
 - [x] `isMinifyEnabled=true` + `isShrinkResources=true` و قواعد R8 در بیلد release CI تأیید میشوند
 - [x] Migration واقعی `MIGRATION_2_3` اضافه شد (fallback فقط برای نصبهای pre-v2 توسعهدهنده)
 - [ ] `MigrationTestHelper` و SBOM / بررسی CVE
