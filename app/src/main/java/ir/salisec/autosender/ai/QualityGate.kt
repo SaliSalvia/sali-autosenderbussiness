@@ -4,7 +4,7 @@ import ir.salisec.autosender.data.ReportBundle
 import ir.salisec.autosender.data.Settings
 
 /** Enforces the agreed red lines BEFORE a human is allowed to approve an email:
- *  - no invented number or claim (every digit must exist in the real report pack)
+ *  - no invented numerical claim (facts must be grounded in the target report; identifiers and fixed footer/signature are excluded)
  *  - no fake urgency / fake deadline / threat / hype
  *  - no spam-evasion tricks, no deceptive subject, no fake headers
  *  - one low-friction CTA + a polite opt-out line
