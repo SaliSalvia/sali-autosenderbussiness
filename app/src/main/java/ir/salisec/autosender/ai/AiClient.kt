@@ -224,10 +224,8 @@ class AiClient(private val client: OkHttpClient) {
         }
         if (activeModel.isBlank()) activeModel = "gpt-4o"
 
-        val allowed = QualityGate.allowedNumbers(
-            s, bundle, aggregate, previousBody, contactName,
-            domain.ifBlank { bundle?.domain.orEmpty() }, email
-        ) + (customerReplyText?.let { QualityGate.numbers(it) } ?: emptySet())
+        // Previous drafts and customer replies are context, never numeric evidence for new claims.
+        val allowed = QualityGate.allowedNumbers(bundle)
         val facts = buildFacts(
             s, bundle, context, aggregate, contactName, style,
             isFollowUp, previousBody, domain, customerReplyText
@@ -345,10 +343,8 @@ class AiClient(private val client: OkHttpClient) {
         email: String = "",
         customerReplyText: String? = null
     ): QualityReport {
-        val allowed = QualityGate.allowedNumbers(
-            s, bundle, aggregate, previousBody, contactName,
-            domain.ifBlank { bundle?.domain.orEmpty() }, email
-        ) + (customerReplyText?.let { QualityGate.numbers(it) } ?: emptySet())
+        // Previous drafts and customer replies are context, never numeric evidence for new claims.
+        val allowed = QualityGate.allowedNumbers(bundle)
         return QualityGate.validate(result, s, allowed, isFollowUp)
     }
 
