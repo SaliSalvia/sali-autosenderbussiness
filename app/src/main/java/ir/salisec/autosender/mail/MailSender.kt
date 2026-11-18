@@ -56,7 +56,6 @@ class BrevoSender(private val client: OkHttpClient) : MailSender {
             headersObj.put("idempotencyKey", msg.idempotencyKey)
         }
         headersObj.put("List-Unsubscribe", "<mailto:$replyAddr?subject=unsubscribe>")
-        headersObj.put("List-Unsubscribe-Post", "List-Unsubscribe=One-Click")
         msg.inReplyToMessageId?.takeIf { it.isNotBlank() }?.let { rawId ->
             val cleanId = normalizeMessageId(rawId)
             val refs = msg.references?.takeIf { r -> r.isNotBlank() }?.let { normalizeReferences(it) } ?: cleanId
@@ -157,7 +156,6 @@ class SmtpSender : MailSender {
             mm.setHeader("Message-ID", rfcMsgId)
         }
         mm.setHeader("List-Unsubscribe", "<mailto:$replyAddr?subject=unsubscribe>")
-        mm.setHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click")
         msg.inReplyToMessageId?.takeIf { it.isNotBlank() }?.let { rawId ->
             val cleanId = normalizeMessageId(rawId)
             val refs = msg.references?.takeIf { r -> r.isNotBlank() }?.let { normalizeReferences(it) } ?: cleanId
