@@ -56,7 +56,6 @@ class BrevoSender(private val client: OkHttpClient) : MailSender {
             headersObj.put("idempotencyKey", msg.idempotencyKey)
         }
         headersObj.put("List-Unsubscribe", "<mailto:$replyAddr?subject=unsubscribe>")
-        headersObj.put("List-Unsubscribe-Post", "List-Unsubscribe=One-Click")
         msg.inReplyToMessageId?.takeIf { it.isNotBlank() }?.let { rawId ->
             val cleanId = normalizeMessageId(rawId)
             val refs = msg.references?.takeIf { r -> r.isNotBlank() }?.let { normalizeReferences(it) } ?: cleanId
@@ -157,7 +156,6 @@ class SmtpSender : MailSender {
             mm.setHeader("Message-ID", rfcMsgId)
         }
         mm.setHeader("List-Unsubscribe", "<mailto:$replyAddr?subject=unsubscribe>")
-        mm.setHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click")
         msg.inReplyToMessageId?.takeIf { it.isNotBlank() }?.let { rawId ->
             val cleanId = normalizeMessageId(rawId)
             val refs = msg.references?.takeIf { r -> r.isNotBlank() }?.let { normalizeReferences(it) } ?: cleanId
@@ -207,6 +205,7 @@ class SmtpSender : MailSender {
             try {
                 if (transport.isConnected) transport.close()
             } catch (_: Exception) {
+                // Preserve the original send/transport exception.
             }
         }
     }
@@ -232,25 +231,15 @@ fun buildHtmlEmail(msg: OutgoingMessage): String {
             escapeHtml(msg.preheader) + "</div>"
     val rawBody = msg.textBody.ifBlank { msg.htmlBody }.trim()
     val blocks = rawBody.split(Regex("""\n{2,}"""))
-    val renderedBlocks = blocks.mapIndexed { idx, block ->
-        val trimmed = block.trim()
-        val safe = escapeHtml(trimmed).replace("\n", "<br>")
-        val isTail = idx >= (blocks.size - 2).coerceAtLeast(0)
-        val isFooter = isTail && (
-            trimmed.contains("واژه «حذف»") ||
-                trimmed.contains("با حذف پاسخ") ||
-                trimmed.contains("لغو اشتراک") ||
-                trimmed.contains("از فهرست حذف") ||
-                trimmed.contains("unsubscribe", ignoreCase = true) ||
-                trimmed.contains("https://salisec.ir", ignoreCase = true) ||
-                trimmed.startsWith("---")
-            )
+    val renderedBlocks = blocks.joinToString("") { block ->
+        val safe = escapeHtml(block.trim()).replace("\n", "<br>")
+        val isFooter = block.contains("حذف") || block.contains("unsubscribe", ignoreCase = true) || block.contains("http")
         if (isFooter) {
             "<p style=\"margin:14px 0 0 0;padding-top:10px;border-top:1px solid #E5E7EB;font-size:12.5px;line-height:1.75;color:#4B5563\">$safe</p>"
         } else {
             "<p style=\"margin:0 0 12px 0;font-size:14.5px;line-height:1.95;color:#111827\">$safe</p>"
         }
-    }.joinToString("")
+    }
     return """<!DOCTYPE html><html dir="rtl" lang="fa"><body style="margin:0;padding:12px;background:#F8FAFC">""" +
         pre +
         """<div dir="rtl" style="font-family:Vazirmatn,Tahoma,Arial,sans-serif;max-width:640px;margin:0 auto;background:#FFFFFF;border:1px solid #E2E8F0;border-top:3px solid #0284C7;border-radius:10px;padding:22px 24px">""" +
