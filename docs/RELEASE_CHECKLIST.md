@@ -1,10 +1,10 @@
 # ✅ چکلیست انتشار (Go / No-Go) — SaliBussiness
 
 **قاعده طلایی:** بیلد سبز «لازم» است، نه «کافی». **هر بند `P0` که تیک نخورده باشد = No-Go**، حتی اگر APK ساخته شده باشد.
-نسخه چکلیست: ۱٫۱ · ۲۰۲۶-۱۱-۰۳ · مرتبط با [`WORLD_CLASS_ROADMAP.md`](WORLD_CLASS_ROADMAP.md) · [`CHANGELOG.md`](../CHANGELOG.md)
+نسخه چکلیست: ۱٫۲ · ۲۰۲۶-۱۱-۱۸ · مرتبط با [`WORLD_CLASS_ROADMAP.md`](WORLD_CLASS_ROADMAP.md) · [`CHANGELOG.md`](../CHANGELOG.md)
 
 > ## 🔴 تصمیم فعلی: **No-Go برای انتشار عمومی / Play**
-> فاز ۰ و بخش بزرگی از فاز ۱–۴ اجرا شده (بیلد سبز، تست واحد، idempotency، lease، migration،
+> Candidate سخت‌سازی `2.0.1`؛ فاز ۰ و بخش بزرگی از فاز ۱–۴ اجرا شده (بیلد سبز، تست واحد، idempotency، lease، migration،
 > API 36، بکاپ/شبکه، R8، PRIVACY/SECURITY، AAB در CI)، ولی بندهای P0 زیر همچنان بازاند:
 > Golden Set واقعی، وبحوک bounce/complaint، تأیید SPF/DKIM/DMARC، رضایت مستند بهازای هر مخاطب،
 > Play App Signing، انتشار مرحلهای و تست دستگاه Android 16. «حذف همه دادهها» داخل اپ اکنون پیادهسازی شده است.
@@ -19,6 +19,8 @@
 - [x] منطق idempotency (UUID پایدار، `duplicate_parameter` = موفقیت، `UNCERTAIN` بدون retry) — تست واحد `MessageStateTest`
 - [ ] تست شبیهسازی شبکه قابل اطمینان (timeout → دقیقاً ۰ ارسال تکراری) با FakeBrevo/MockWebServer
 - [x] فقط ۲ فایل trial دوصفحهای (`_fa` + انگلیسی)؛ `%PDF`، `pages==2` و نامها روی بایتهای واقعی (`AttachmentGuard`)
+- [x] تازگی Evidence Pack در لحظه ارسال دوباره محاسبه و با هش زمان تأیید مقایسه می‌شود؛ هویت و ترتیب پیوست‌ها نیز دوباره تطبیق داده می‌شوند (`EvidenceApprovalGuard` + تست واحد)
+- [x] ایمیل تست به صندوق فرستنده در صورت داشتن پیوست، همان سیاست Trial دوصفحه‌ای و محدودیت اندازه را اجرا می‌کند
 - [x] حجم هر پیوست ≤ ۴MB و مجموع ≤ ۲۰MB (محدودیت مستند Brevo)
 - [x] `QualityGate` بعد از ویرایش دستی هم اجرا میشود؛ دکمه تأیید تا عبور گیت غیرفعال است
 - [x] خط opt-out و `Re:/Fwd:` جعلی/فوریت ساختگی توسط `QualityGate` مسدودند (تست واحد)
