@@ -25,6 +25,17 @@ class AttachmentPolicyTest {
     }
 
     @Test
+    fun prioritizesOnlyTheNewestMatchingTrialPair() {
+        val olderFa = PdfDoc("2026-11-13_13-06_trial_fa.pdf", "content://old-fa", pages = null, lastModified = 900L)
+        val olderEn = PdfDoc("2026-11-13_13-06_trial.pdf", "content://old-en", pages = null, lastModified = 900L)
+        val candidates = AttachmentPolicy.selectTrialCandidates(
+            listOf(olderFa, olderEn, newestEn.copy(pages = null), newestFa.copy(pages = null))
+        )
+        assertEquals(2, candidates.size)
+        assertEquals(setOf(newestFa.uri, newestEn.uri), candidates.map { it.uri }.toSet())
+    }
+
+    @Test
     fun selectsOnlyMatchingTwoPagePersianEnglishTrialPair() {
         val full = PdfDoc("2026-11-14_13-07_full_report.pdf", "content://full", pages = 18, lastModified = 2000L)
         val pair = AttachmentPolicy.selectTrialPair(listOf(olderScan, olderExec, full, newestEn, newestFa))
