@@ -89,14 +89,18 @@ object QualityGate {
             numericClaimText = numericClaimText.replace(it, "", ignoreCase = true)
         }
         val normalizedNumericClaimText = normalizeDigits(numericClaimText)
-        val scoreDenominatorIsGrounded = scoreValue?.let { expected ->
-            val normalizedScore = normalizeDigits(expected)
-            scoreDenominatorRegex.findAll(normalizedNumericClaimText).any {
-                it.groupValues[1] == normalizedScore
+        val scoreNumber = scoreValue?.let { normalizeDigits(it) }
+        // Remove only the exact, evidence-backed score denominator occurrence.
+        // A separate claim such as "100 customers" must still fail the numeric gate.
+        val numericClaimsWithoutGroundedDenominator = if (scoreNumber == null) {
+            normalizedNumericClaimText
+        } else {
+            scoreDenominatorRegex.replace(normalizedNumericClaimText) { match ->
+                if (match.groupValues[1] == scoreNumber) match.groupValues[1] else match.value
             }
-        } ?: false
-        val used = numbers(normalizedNumericClaimText)
-        val invented = used.filter { it !in allowed && !(it == "100" && scoreDenominatorIsGrounded) }
+        }
+        val used = numbers(numericClaimsWithoutGroundedDenominator)
+        val invented = used.filter { it !in allowed }
         if (invented.isNotEmpty()) {
             blockers.add("عدد/رقمی در متن هست که در گزارش واقعی وجود ندارد: " + invented.take(6).joinToString("، "))
         }
