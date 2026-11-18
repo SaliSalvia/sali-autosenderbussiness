@@ -30,7 +30,7 @@
 > 🗺️ نقشه راه «محصول کلاس جهانی / آماده انتشار»: **[docs/WORLD_CLASS_ROADMAP.md](docs/WORLD_CLASS_ROADMAP.md)**
 > ✅ [چکلیست Go/No-Go](docs/RELEASE_CHECKLIST.md) · [تاریخچه](CHANGELOG.md) · [امنیت](SECURITY.md) · [حریم خصوصی FA/EN](PRIVACY.md) · [مشارکت](CONTRIBUTING.md)
 
-**وضعیت کاندید (versionName `2.0.2` / versionCode `5`):** اصلاحات UX در انتظار CI و تأیید نصب روی دستگاه واقعی است؛ آخرین نسخه‌ای که CI آن سبز شده `2.0.1` است. `compileSdk/targetSdk = 36`،
+**وضعیت کاندید (versionName `2.0.2` / versionCode `5`):** CI مربوط به اصلاحات فعلی، شامل تست واحد، lint، APK و AAB و امضای Release، موفق شده است؛ نصب و آزمون روی دستگاه واقعی Android 16 هنوز انجام و تأیید نشده است. `compileSdk/targetSdk = 36`،
 بیلد CI شامل تست واحد + lint + R8 release + AAB، صف ارسال idempotent با قفل/lease، لاگ بدون PII با نگهداری خودکار ۹۰روزه،
 `allowBackup=false` + `dataExtractionRules`، «پاکسازی کامل دادهها» داخل تنظیمات، و داشبورد کاری با
 **یک دکمه ارسال گروهی** (فقط پیامهای تأییدشده).
@@ -63,7 +63,7 @@
 - فقط با هر چهار secret امضای تولیدی: `SaliBussiness.apk` و `SaliBussiness.aab` (امضاشده).
 - بدون secretهای امضا: `SaliBussiness-unsigned-release.apk` و `SaliBussiness-unsigned-release.aab`؛ این فایلها فقط برای اعتبارسنجی build هستند و برای نصب/آپلود Play مناسب نیستند.
 
-GitHub Release با تگ `latest` یا تگ نسخه‌ای `v*` **فقط زمانی منتشر می‌شود که هر چهار secret** `SALI_KEYSTORE_BASE64`, `SALI_KEYSTORE_PASSWORD`, `SALI_KEY_ALIAS`, `SALI_KEY_PASSWORD` به‌طور کامل تنظیم شده باشند. تنظیم ناقص secretها باعث شکست کنترل‌شده CI می‌شود؛ APK دیباگ هرگز با نام Release تولیدی منتشر نمی‌شود.
+**قانون انتشار نسخه‌ای:** روی `main`، PR و `workflow_dispatch` فقط CI و Artifactهای Actions ساخته می‌شوند؛ این اجراها Release ایجاد یا تگ `latest` را جابه‌جا نمی‌کنند. انتشار GitHub Release فقط با push تگ تغییرناپذیر `vX.Y.Z` انجام می‌شود و workflow بررسی می‌کند که بخش نسخه تگ دقیقاً با `versionName` در `app/build.gradle.kts` برابر باشد. هر چهار secret امضای تولیدی برای تگ نسخه‌ای الزامی‌اند؛ در نبود یا ناقص بودن آن‌ها انتشار fail می‌شود. Release نسخه‌ای شامل APK و AAB امضاشده و `SHA256SUMS.txt` است؛ APK دیباگ فقط در Artifactهای CI می‌ماند. GitHub بر اساس `make_latest: true` آخرین Release نسخه‌ای را به‌عنوان Latest علامت می‌زند. تگ قدیمی `latest` صرفاً تاریخی است و نباید برای انتشار نسخه جدید استفاده شود. روند کامل: [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md).
 - هنگام شکست، artifact `build-logs` حاوی `checks.log` / `build.log` / `release.log` و گزارشهای lint/test آپلود میشود.
 - ابزار ساخت pin شده است (`build.gradle.kts` + `gradle/wrapper/gradle-wrapper.properties`)؛
   ارتقای majorـهای AGP/Gradle/Kotlin باید **هماهنگ** و طی یک PR با بیلد سبز انجام شود، نه تکبهتک توسط Dependabot.
