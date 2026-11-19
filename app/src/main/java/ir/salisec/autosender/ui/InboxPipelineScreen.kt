@@ -57,6 +57,7 @@ import ir.salisec.autosender.data.OutgoingMessage
 import ir.salisec.autosender.data.ReportBundle
 import ir.salisec.autosender.data.ReportReader
 import ir.salisec.autosender.mail.BrevoSender
+import ir.salisec.autosender.mail.EmailAutoconfig
 import ir.salisec.autosender.mail.InboxMessage
 import ir.salisec.autosender.mail.SmtpSender
 import kotlinx.coroutines.Dispatchers
@@ -238,7 +239,7 @@ private fun PipelineTab(app: App) {
                 reload()
                 okMsg = "همگام‌سازی کامل شد ✓ | $repliesMatched پاسخ جدید، $optOutsMatched خروج، $bouncesMatched برگشتی (Bounce)"
             } catch (e: Exception) {
-                error = "خطای همگام‌سازی IMAP: ${e.message?.take(140)}"
+                error = EmailAutoconfig.formatMailError("IMAP", e)
             }
             syncing = false
         }
@@ -414,7 +415,7 @@ private fun PipelineTab(app: App) {
                     modelSent.groupBy { it.modelUsed }.forEach { (model, items) ->
                         val conv = items.count { it.pipelineState in setOf("REPLIED", "NEGOTIATING", "PAID") }
                         val convPct = (conv * 100) / items.size
-                        Chip("${model.take(24)}: $convPct% ($conv/${items.size})", MaterialTheme.colorScheme.secondary)
+                        Chip("${ltrIsolate(model.take(24))}: $convPct% ($conv/${items.size})", MaterialTheme.colorScheme.secondary)
                     }
                 }
             }
@@ -443,7 +444,7 @@ private fun PipelineTab(app: App) {
             filteredList.forEach { m ->
                 val due = isDueForFollowUp(m, nowMs)
                 Section(
-                    header = (if (m.isFollowUp) "پیگیری ${m.followUpStep.coerceAtLeast(1)}: " else "") + m.domain,
+                    header = (if (m.isFollowUp) "پیگیری ${m.followUpStep.coerceAtLeast(1)}: " else "") + ltrIsolate(m.domain),
                     badge = m.pipelineState,
                     badgeColor = when (m.pipelineState) {
                         "PAID" -> GreenOk
@@ -452,7 +453,7 @@ private fun PipelineTab(app: App) {
                         else -> MaterialTheme.colorScheme.primary
                     }
                 ) {
-                    Text(m.email, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(ltrIsolate(m.email), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(m.subject, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
 
                     FlowRow(
@@ -466,10 +467,10 @@ private fun PipelineTab(app: App) {
                             Chip("یادآور پیگیری تا $daysLeft روز دیگر", MaterialTheme.colorScheme.primary)
                         }
                         if (m.subjectVariant.isNotBlank()) {
-                            Chip(m.subjectVariant, MaterialTheme.colorScheme.tertiary)
+                            Chip(ltrIsolate(m.subjectVariant), MaterialTheme.colorScheme.tertiary)
                         }
                         if (m.modelUsed.isNotBlank()) {
-                            Chip(m.modelUsed.take(22), MaterialTheme.colorScheme.secondary)
+                            Chip(ltrIsolate(m.modelUsed.take(22)), MaterialTheme.colorScheme.secondary)
                         }
                         val toks = m.promptTokens + m.completionTokens
                         if (toks > 0) {
@@ -492,7 +493,8 @@ private fun PipelineTab(app: App) {
                     }
 
                     if (m.attachmentNames.isNotBlank()) {
-                        SubTitle("پیوست: " + m.attachmentNames.replace("||", " + "))
+                        val isolatedNames = m.attachmentNames.split("||").filter { it.isNotBlank() }.joinToString(" + ") { ltrIsolate(it) }
+                        SubTitle("پیوست: $isolatedNames")
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = {
@@ -532,7 +534,7 @@ private fun PipelineTab(app: App) {
     draft?.let { d ->
         AlertDialog(
             onDismissRequest = { draft = null },
-            title = { Text("بازبینی پیگیری — " + d.original.domain) },
+            title = { Text("بازبینی پیگیری — " + ltrIsolate(d.original.domain)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     LabeledField("موضوع", d.result.subject) { v ->
@@ -697,7 +699,7 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                     notice = "تطبیق خودکار با سرنخ‌ها: $rep پاسخ، $opt خروج، $bnc برگشتی ✓"
                 }
             } catch (e: Exception) {
-                error = "اتصال به صندوق ناموفق: " + (e.message?.take(160) ?: "")
+                error = EmailAutoconfig.formatMailError("IMAP", e)
             }
             loading = false
         }
@@ -754,7 +756,7 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                                 matchedLead = dbLeads.maxByOrNull { it.sentAt ?: it.createdAt }
                                 open = m
                             } catch (e: Exception) {
-                                error = "خواندن پیام ناموفق: " + (e.message?.take(120) ?: "")
+                                error = EmailAutoconfig.formatMailError("IMAP", e)
                             } finally {
                                 openingMessage = false
                             }
@@ -763,7 +765,7 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                 ) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(m.from, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                            Text(ltrIsolate(m.from), fontSize = 12.sp, modifier = Modifier.weight(1f))
                             Text(
                                 if (m.date > 0L) fmt.format(Date(m.date)) else "—",
                                 fontSize = 11.sp,
@@ -772,10 +774,10 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                         }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             if (m.isBounce) {
-                                Chip("گزارش برگشت ایمیل (Bounce: ${m.bouncedAddress ?: "?"})", RedErr)
+                                Chip("گزارش برگشت ایمیل (Bounce: ${ltrIsolate(m.bouncedAddress ?: "?")})", RedErr)
                             }
                             if (lead != null) {
-                                Chip("سرنخ ${lead.domain}: ${lead.pipelineState}", GreenOk)
+                                Chip("سرنخ ${ltrIsolate(lead.domain)}: ${lead.pipelineState}", GreenOk)
                             }
                         }
                         Text(m.subject.ifBlank { "(بدون موضوع)" }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
@@ -787,9 +789,9 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
     } else {
         val m = open!!
         Section(header = m.subject.ifBlank { "(بدون موضوع)" }, icon = Icons.Default.Inbox) {
-            SubTitle("از: " + m.from)
+            SubTitle("از: " + ltrIsolate(m.from))
             matchedLead?.let { lead ->
-                Chip("متصل به سرنخ ${lead.domain} (${lead.pipelineState})", GreenOk)
+                Chip("متصل به سرنخ ${ltrIsolate(lead.domain)} (${lead.pipelineState})", GreenOk)
             }
             Text(openText, style = MaterialTheme.typography.bodyMedium)
         }
@@ -811,7 +813,7 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                                 }
                             app.engine.notifyQueueChanged()
                         }
-                        notice = "${address.substringAfter('@')} به لیست عدم ارسال اضافه شد"
+                        notice = "${ltrIsolate(address.substringAfter('@'))} به لیست عدم ارسال اضافه شد"
                         open = null
                     } else {
                         error = "آدرس فرستنده پیدا نشد"
@@ -939,7 +941,8 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                             open = null
                             notice = "پاسخ در همان رشته Thread ایمیل ارسال شد ✓"
                         } catch (e: Exception) {
-                            error = "ارسال پاسخ ناموفق: " + (e.message?.take(160) ?: "")
+                            val label = if (app.prefs.load().sendMode == "BREVO_API") "Brevo" else "SMTP"
+                            error = EmailAutoconfig.formatMailError(label, e)
                         }
                         sending = false
                     }

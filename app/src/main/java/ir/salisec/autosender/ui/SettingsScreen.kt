@@ -692,6 +692,17 @@ fun SettingsScreen(
             LabeledField("رمز صندوق ایمیل (IMAP Password)", s.imapPass, isSecret = true) {
                 s = s.copy(imapPass = it); saved = false
             }
+            if (s.sendMode == "SMTP" && s.imapPass.isNotBlank() && s.smtpPass != s.imapPass) {
+                TextButton(onClick = {
+                    s = s.copy(
+                        smtpPass = s.imapPass,
+                        smtpUser = s.smtpUser.ifBlank { s.imapUser.ifBlank { s.fromEmail } }
+                    )
+                    saved = false
+                }) {
+                    Text("کپی همین نام کاربری و رمز برای SMTP نیز")
+                }
+            }
 
             OutlinedButton(
                 onClick = {

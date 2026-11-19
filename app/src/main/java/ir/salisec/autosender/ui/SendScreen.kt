@@ -223,7 +223,7 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
                 }
             } else if (state.running) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                state.currentDomain?.let { SubTitle(stringResource(R.string.home_current) + ": $it") }
+                state.currentDomain?.let { SubTitle(stringResource(R.string.home_current) + ": ${ltrIsolate(it)}") }
                 state.waitingUntil?.let { w ->
                     val remain = ((w - nowTick) / 1000).coerceAtLeast(0)
                     Chip(stringResource(R.string.send_waiting) + " $remain ثانیه دیگر", MaterialTheme.colorScheme.primary)
@@ -282,7 +282,7 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(m.domain, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                    Text(ltrIsolate(m.domain), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                                     StatusChip(m.status)
                                 }
                                 Text(
@@ -290,8 +290,10 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                                 SubTitle(
-                                    PrivacyRedactor.maskEmail(m.email) +
-                                        if (m.attachmentNames.isNotBlank()) " • پیوست: ${m.attachmentNames.replace("||", " + ")}" else ""
+                                    ltrIsolate(PrivacyRedactor.maskEmail(m.email)) +
+                                        if (m.attachmentNames.isNotBlank()) {
+                                            " • پیوست: " + m.attachmentNames.split("||").filter { it.isNotBlank() }.joinToString(" + ") { ltrIsolate(it) }
+                                        } else ""
                                 )
                                 if (!m.lastError.isNullOrBlank()) {
                                     Text(
@@ -364,7 +366,7 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
                     state.logs.take(40).forEach { l ->
                         val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(l.ts))
                         Text(
-                            "$time  ${if (l.ok) "✓" else "!"}  ${l.domain}  ${l.email}  —  ${l.message}",
+                            "$time  ${if (l.ok) "✓" else "!"}  ${ltrIsolate(l.domain)}  ${ltrIsolate(l.email)}  —  ${l.message}",
                             fontSize = 11.5.sp,
                             fontFamily = MonoFontFamily,
                             color = if (l.ok) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
@@ -450,7 +452,7 @@ private fun DeliverabilityChecklistCard(
                 SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(report.checkedAt))
             }
             if (report.isClean) {
-                Chip("دامنه ${report.senderDomain} برای ارسال با کمترین ریسک اسپم کاملاً تأیید شد ✓ (بررسی: $timeStr)", GreenOk)
+                Chip("دامنه ${ltrIsolate(report.senderDomain)} برای ارسال با کمترین ریسک اسپم کاملاً تأیید شد ✓ (بررسی: $timeStr)", GreenOk)
             } else if (report.hasCriticalFailure) {
                 Chip("هشدار: مشکلات بحرانی پایین را در پنل DNS / تنظیمات برطرف کرده و «چک مجدد» بزنید (بررسی: $timeStr)", RedErr)
             } else {

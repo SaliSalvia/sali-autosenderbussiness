@@ -52,6 +52,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ir.salisec.autosender.App
 import ir.salisec.autosender.R
@@ -123,7 +124,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
             ) {
                 val modelLabel = when {
                     !hasHcns -> "hcnsec: کلید ندارد"
-                    settings.hcnsModel.isNotBlank() -> "مدل: ${settings.hcnsModel}"
+                    settings.hcnsModel.isNotBlank() -> "مدل: ${ltrIsolate(settings.hcnsModel)}"
                     else -> "hcnsec: انتخاب خودکار"
                 }
                 Chip(modelLabel, if (hasHcns) GreenOk else RedErr, onClick = { go(Screen.Settings) })
@@ -203,7 +204,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                     if (sendState.paused) stringResource(R.string.home_paused)
                     else stringResource(R.string.home_processing)
                 )
-                sendState.currentDomain?.let { SubTitle("دامنه فعلی: $it") }
+                sendState.currentDomain?.let { SubTitle("دامنه فعلی: ${ltrIsolate(it)}") }
                 OutlinedButton(
                     onClick = { go(Screen.Send) },
                     modifier = Modifier.fillMaxWidth()
@@ -223,8 +224,11 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                     Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        if (pendingCount > 0) stringResource(R.string.home_send_all) + " ($pendingCount)"
-                        else stringResource(R.string.home_queue_empty)
+                        text = if (pendingCount > 0) stringResource(R.string.home_send_all) + " ($pendingCount)"
+                        else stringResource(R.string.home_queue_empty),
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
