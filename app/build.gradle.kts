@@ -21,20 +21,15 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    // Debug builds use the Android Gradle Plugin's standard per-user debug keystore.
-    // No developer-local debug.keystore is required in the repository or CI.
-    signingConfigs {
-        create("debugConfig") {
-            storeFile = file("${rootDir}/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-        }
-    }
-
+    // Debug builds use the Android Gradle Plugin's standard per-user debug keystore
+    // (~/.android/debug.keystore), which AGP generates on demand. No debug.keystore is
+    // required in the repository or CI, so a fresh checkout builds without extra setup.
+    // Production signing is injected by CI via -Pandroid.injected.signing.* for releases.
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("debugConfig")
+            // Keep the default `debug` signing config: it is self-generating and cannot
+            // break clean checkouts the way a committed/absent keystore file did.
+            signingConfig = signingConfigs.getByName("debug")
         }
         release {
             // R8 is on so the release artifact is a real, shrunk build. Conservative
