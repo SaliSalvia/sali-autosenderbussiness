@@ -47,7 +47,7 @@ data class DeliverabilityReport(
 class DeliverabilityChecker(private val client: OkHttpClient) {
 
     private val defaultSelectors = listOf(
-        "brevo1", "brevo2", "mail", "dkim", "default",
+        "runflare", "dkim1", "brevo1", "brevo2", "mail", "dkim", "default",
         "google", "selector1", "selector2", "s1", "s2", "k1", "zoho"
     )
 

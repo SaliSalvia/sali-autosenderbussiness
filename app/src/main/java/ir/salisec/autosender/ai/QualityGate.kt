@@ -53,6 +53,7 @@ object QualityGate {
                 .filterNotNull()
                 .forEach { out.add(it.toString()) }
             d.freeFindingCvss?.let { out.addAll(numbers(it)) }
+            d.secondaryFindingCvss?.let { out.addAll(numbers(it)) }
         }
         return out
     }

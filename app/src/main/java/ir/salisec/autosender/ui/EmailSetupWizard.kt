@@ -1,5 +1,7 @@
 package ir.salisec.autosender.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +22,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -36,6 +39,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -45,7 +49,9 @@ import ir.salisec.autosender.data.ContactsParser
 import ir.salisec.autosender.mail.AccountVerifyResult
 import ir.salisec.autosender.mail.AutoconfigResult
 import ir.salisec.autosender.mail.EmailAutoconfig
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Thunderbird-style Email Account Sign-In & Auto-Configuration Wizard:
@@ -59,6 +65,7 @@ fun EmailSetupWizard(
     isFirstRun: Boolean,
     onDone: () -> Unit
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val initial = remember { app.prefs.load() }
 
@@ -85,6 +92,51 @@ fun EmailSetupWizard(
     var verifying by remember { mutableStateOf(false) }
     var verifyResult by remember { mutableStateOf<AccountVerifyResult?>(null) }
     var formError by remember { mutableStateOf<String?>(null) }
+
+    val k9Picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val xml = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                    } catch (_: Exception) { "" }
+                }
+                val parsed = EmailAutoconfig.parseK9Settings(xml)
+                if (parsed == null) {
+                    formError = "فایل .k9s معتبر پیدا نشد یا سرورهای IMAP/SMTP ندارد."
+                } else {
+                    formError = null
+                    if (parsed.email.isNotBlank()) email = parsed.email
+                    if (parsed.imapHost.isNotBlank()) {
+                        imapHost = parsed.imapHost
+                        imapPort = parsed.imapPort.toString()
+                        imapSecurity = parsed.imapSecurity
+                    }
+                    if (parsed.smtpHost.isNotBlank()) {
+                        smtpHost = parsed.smtpHost
+                        smtpPort = parsed.smtpPort.toString()
+                        smtpSecurity = parsed.smtpSecurity
+                        sendMode = "SMTP"
+                    }
+                    imapUser = parsed.imapUsername.ifBlank { email }
+                    smtpUser = parsed.smtpUsername.ifBlank { email }
+                    discoveredInfo = AutoconfigResult(
+                        providerName = parsed.name.ifBlank { "Thunderbird .k9s" },
+                        source = "K9_IMPORT",
+                        imapHost = imapHost,
+                        imapPort = imapPort.toIntOrNull() ?: 993,
+                        imapSecurity = imapSecurity,
+                        smtpHost = smtpHost,
+                        smtpPort = smtpPort.toIntOrNull() ?: 465,
+                        smtpSecurity = smtpSecurity,
+                        usernameTemplate = "FULL_EMAIL",
+                        note = "تنظیمات از فایل Thunderbird (.k9s) خوانده شد. رمز صندوق ایمیل را وارد کنید."
+                    )
+                    showAdvanced = true
+                }
+            }
+        }
+    }
 
     fun buildCandidateSettings() = app.prefs.load().copy(
         accountSetupDone = true,
@@ -223,6 +275,43 @@ fun EmailSetupWizard(
                 Text(if (discovering) "در حال جستجوی سرورهای دامنه..." else "تشخیص خودکار سرورهای ورودی و خروجی (Auto-Config)")
             }
 
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        val preset = EmailAutoconfig.runflarePreset(email)
+                        discoveredInfo = preset
+                        imapHost = preset.imapHost
+                        imapPort = preset.imapPort.toString()
+                        imapSecurity = preset.imapSecurity
+                        smtpHost = preset.smtpHost
+                        smtpPort = preset.smtpPort.toString()
+                        smtpSecurity = preset.smtpSecurity
+                        sendMode = "SMTP"
+                        val u = preset.resolvedUsername(email)
+                        if (u.isNotBlank()) {
+                            imapUser = u
+                            smtpUser = u
+                        }
+                        showAdvanced = true
+                        formError = null
+                    },
+                    modifier = Modifier.weight(1f).testTag("wizard_runflare_preset")
+                ) {
+                    Text("پریست Runflare")
+                }
+                OutlinedButton(
+                    onClick = { k9Picker.launch(arrayOf("*/*")) },
+                    modifier = Modifier.weight(1f).testTag("wizard_import_k9s")
+                ) {
+                    Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("فایل .k9s")
+                }
+            }
+
             if (discovering) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
@@ -236,13 +325,13 @@ fun EmailSetupWizard(
                 ) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            "ارائه‌دهنده: ${info.providerName} (${info.source})",
+                            "ارائه‌دهنده: ${ltrIsolate(info.providerName)} (${info.source})",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = GreenOk
                         )
-                        SubTitle("ورودی IMAP: ${info.imapHost}:${info.imapPort} (${info.imapSecurity})")
-                        SubTitle("خروجی SMTP: ${info.smtpHost}:${info.smtpPort} (${info.smtpSecurity})")
+                        SubTitle("ورودی IMAP: ${ltrIsolate("${info.imapHost}:${info.imapPort}")} (${info.imapSecurity})")
+                        SubTitle("خروجی SMTP: ${ltrIsolate("${info.smtpHost}:${info.smtpPort}")} (${info.smtpSecurity})")
                         if (info.note.isNotBlank()) SubTitle(info.note)
                     }
                 }
@@ -252,7 +341,7 @@ fun EmailSetupWizard(
         Section(
             header = "۲. تنظیمات دستی / پیشرفته سرورها",
             icon = Icons.Default.MarkEmailRead,
-            badge = if (imapHost.isNotBlank()) "$imapHost:$imapPort" else "تنظیم نشده"
+            badge = if (imapHost.isNotBlank()) ltrIsolate("$imapHost:$imapPort") else "تنظیم نشده"
         ) {
             TextButton(
                 onClick = { showAdvanced = !showAdvanced },

@@ -13,8 +13,8 @@ import java.io.InputStream
 /** Reads the user-selected "sitest" folder (SAF).
  *
  *  Fast folder indexing + automatic matching by email/domain.
- *  Parses at most six PDFs per domain, prioritizing a filename-matched trial pair
- *  so older eligible attachments are not hidden by newer unrelated reports. */
+ *  Strictly parses only the 2 newest PDFs per domain (prioritizing the newest
+ *  matched Persian/English trial pair) so older reports never leak into AI analysis. */
 object ReportReader {
 
     private val freeEmailDomains = setOf(
@@ -133,10 +133,11 @@ object ReportReader {
     fun jsonIn(folder: DocumentFile): DocumentFile? =
         folder.listFiles().firstOrNull { it.isFile && it.name?.lowercase()?.endsWith(".json") == true }
 
-    private const val MAX_PDFS_FOR_AI = 6
+    internal const val MAX_PDFS_FOR_AI = 2
     internal const val MAX_SIDECAR_BYTES = 256 * 1024
 
-    /** Main entry: parse at most six PDFs, prioritizing a matching trial pair, plus an optional JSON sidecar.
+    /** Main entry: strictly reads only the 2 newest PDFs per domain folder (prioritizing
+     *  the newest matching bilingual trial pair), plus an optional JSON sidecar.
      *  Uses Room [pdfCacheDao] when available so unchanged PDFs are not re-parsed by PDFBox. */
     suspend fun readBundle(
         context: Context,
@@ -254,12 +255,12 @@ object ReportReader {
         val scannedData = parsePdfFacts(domain, docs)
         val report = merge(sidecarData, scannedData)
 
+        val selected = AttachmentPolicy.selectTrialPair(docs)
         if (allPdfFiles.isEmpty()) {
             warnings.add("هیچ PDF در پوشه ${folder.name} پیدا نشد")
         }
-        val selected = AttachmentPolicy.selectTrialPair(docs)
         if (allPdfFiles.size > MAX_PDFS_FOR_AI) {
-            warnings.add("از ${allPdfFiles.size} فایل PDF، حداکثر ${MAX_PDFS_FOR_AI} فایل برای تحلیل خوانده شد؛ جفت trial در اولویت قرار گرفت")
+            warnings.add("از ${allPdfFiles.size} فایل PDF در پوشه، فقط ۲ نسخه جدیدترین برای تحلیل هوش مصنوعی خوانده شد")
         }
         if (selected.isEmpty() && allPdfFiles.isNotEmpty()) {
             warnings.add("جفت معتبر فارسی/انگلیسی trial با دقیقاً دو صفحه و قابلیت خواندن پیدا نشد؛ هیچ PDFای پیوست نخواهد شد")
@@ -358,58 +359,177 @@ object ReportReader {
     private fun jStr(o: JSONObject, key: String): String? =
         o.optString(key, "").trim().takeIf { it.isNotBlank() && it != "null" }
 
-    /** Extract real facts from the parsed PDF subset (never invents numbers). */
+    private fun merge(base: ReportData?, extra: ReportData?): ReportData? {
+        if (base == null) return extra
+        if (extra == null) return base
+        return base.copy(
+            scanId = base.scanId ?: extra.scanId,
+            score = base.score ?: extra.score,
+            findings = base.findings ?: extra.findings,
+            critical = base.critical ?: extra.critical,
+            high = base.high ?: extra.high,
+            medium = base.medium ?: extra.medium,
+            low = base.low ?: extra.low,
+            freeFindingTitle = base.freeFindingTitle ?: extra.freeFindingTitle,
+            freeFindingCvss = base.freeFindingCvss ?: extra.freeFindingCvss,
+            freeFindingImpact = base.freeFindingImpact ?: extra.freeFindingImpact,
+            freeFindingSolution = base.freeFindingSolution ?: extra.freeFindingSolution,
+            subdomains = base.subdomains ?: extra.subdomains,
+            posture = base.posture ?: extra.posture,
+            secondaryFindingTitle = base.secondaryFindingTitle ?: extra.secondaryFindingTitle,
+            secondaryFindingCvss = base.secondaryFindingCvss ?: extra.secondaryFindingCvss,
+            secondaryFindingImpact = base.secondaryFindingImpact ?: extra.secondaryFindingImpact,
+            secondaryFindingSolution = base.secondaryFindingSolution ?: extra.secondaryFindingSolution,
+            threatExposure = base.threatExposure ?: extra.threatExposure,
+            securityVectors = base.securityVectors ?: extra.securityVectors,
+            owaspSummary = base.owaspSummary ?: extra.owaspSummary,
+            lockedSummary = base.lockedSummary ?: extra.lockedSummary,
+            wafStatus = base.wafStatus ?: extra.wafStatus
+        )
+    }
+
+    /** Extract real facts from the parsed PDF subset (at most 2 latest PDFs; never invents numbers). */
     fun parsePdfFacts(domain: String, docs: List<PdfDoc>): ReportData? {
-        val combined = docs.filter { it.readOk }.joinToString("\n") { it.text }
-        if (combined.isBlank()) return null
+        val readableDocs = docs.filter { it.readOk && it.text.isNotBlank() }.take(MAX_PDFS_FOR_AI)
+        if (readableDocs.isEmpty()) return null
+
+        // Prefer English version first when pairing so non-RTL-reversed Latin titles/headers parse cleanly,
+        // while keeping Persian text immediately available for bilingual extraction.
+        val orderedDocs = readableDocs.sortedBy { if (AttachmentPolicy.isPersianName(it.name)) 1 else 0 }
+        val combined = normalizeText(orderedDocs.joinToString("\n") { it.text })
+
         val score = firstInt(combined, listOf(
-            Regex("""([0-9]{1,3})[ ]*/[ ]*100"""),
-            Regex("""(?:امتیاز|Score|Security Score|Overall Score)[^0-9]{0,25}([0-9]{1,3})""", RegexOption.IGNORE_CASE)
-        ))
+            Regex("""([0-9]{1,3})\s*/\s*100"""),
+            Regex("""(?:نمره\s*کلی|امتیاز(?:\s*امنیتی)?|Overall\s*Grade|Overall\s*Score|Security\s*Score|Score)[^0-9\n]{0,20}([0-9]{1,3})\b""", RegexOption.IGNORE_CASE),
+            Regex("""(?:نمره\s*کلی|امتیاز|Overall\s*Grade|Overall\s*Score|Security\s*Score)\s*(?:0\s+100\s+)?([0-9]{1,3})\b""", RegexOption.IGNORE_CASE)
+        ))?.takeIf { it in 0..100 }
+
         val findings = firstInt(combined, listOf(
-            Regex("""در مجموع[ ]*([0-9]+)[ ]*یافته"""),
-            Regex("""(?:تعداد یافته|Total|Findings)[^0-9]{0,25}([0-9]+)""", RegexOption.IGNORE_CASE),
-            Regex("""([0-9]+)[ ]*(?:یافته|findings?)""", RegexOption.IGNORE_CASE)
+            Regex("""(?:در\s*مجموع|تعداد\s*کل\s*یافته[‌\s]*ها)\s*([0-9]+)\s*یافته"""),
+            Regex("""([0-9]+)\s*finding\(s\)\s*in\s*total""", RegexOption.IGNORE_CASE),
+            Regex("""(?:Total|کل)\s*([0-9]+)\s*/\s*(?:shown|نمایش)""", RegexOption.IGNORE_CASE),
+            Regex("""(?:تعداد\s*یافته|Total\s*Findings|Findings)[^0-9\n]{0,20}([0-9]+)""", RegexOption.IGNORE_CASE),
+            Regex("""([0-9]+)\s*(?:یافته|findings?)""", RegexOption.IGNORE_CASE)
         ))
+
+        // KPI cards place the count ABOVE the label (e.g., "0\nCRITICAL\n0\nHIGH\n8\nMEDIUM\n4\nLOW"
+        // or "4\nکم\n8\nمتوسط\n0\nزیاد\n0\nبحرانی"). Match count-before-label FIRST, and keep
+        // label-before-count strictly single-line ([ \t:]*) so High never grabs Medium's number.
         val critical = firstInt(combined, listOf(
-            Regex("""بحرانی[^0-9]{0,12}([0-9]+)"""),
-            Regex("""Critical[^0-9]{0,12}([0-9]+)""", RegexOption.IGNORE_CASE),
-            Regex("""([0-9]+)[ ]*(?:بحرانی|Critical)""", RegexOption.IGNORE_CASE)
+            Regex("""\b([0-9]+)\s*(?:بحرانی|Critical)\b""", RegexOption.IGNORE_CASE),
+            Regex("""(?:بحرانی|Critical)[ \t:=-]{1,10}([0-9]+)\b""", RegexOption.IGNORE_CASE)
         ))
         val high = firstInt(combined, listOf(
-            Regex("""(?:زیاد|High)[^0-9]{0,12}([0-9]+)""", RegexOption.IGNORE_CASE),
-            Regex("""([0-9]+)[ ]*(?:زیاد|High)""", RegexOption.IGNORE_CASE)
+            Regex("""\b([0-9]+)\s*(?:زیاد|High)\b""", RegexOption.IGNORE_CASE),
+            Regex("""(?:زیاد|High)[ \t:=-]{1,10}([0-9]+)\b""", RegexOption.IGNORE_CASE)
         ))
         val medium = firstInt(combined, listOf(
-            Regex("""(?:متوسط|Medium)[^0-9]{0,12}([0-9]+)""", RegexOption.IGNORE_CASE),
-            Regex("""([0-9]+)[ ]*(?:متوسط|Medium)""", RegexOption.IGNORE_CASE)
+            Regex("""\b([0-9]+)\s*(?:متوسط|Medium)\b""", RegexOption.IGNORE_CASE),
+            Regex("""\b([0-9]+)[ \t]+(?:متوسط|Medium)\b""", RegexOption.IGNORE_CASE),
+            Regex("""(?:متوسط|Medium)[ \t:=-]{1,10}([0-9]+)\b""", RegexOption.IGNORE_CASE)
         ))
         val low = firstInt(combined, listOf(
-            Regex("""(?:کم|Low)[^0-9]{0,12}([0-9]+)""", RegexOption.IGNORE_CASE),
-            Regex("""([0-9]+)[ ]*(?:کم|Low)""", RegexOption.IGNORE_CASE)
+            Regex("""\b([0-9]+)\s*(?:کم|Low)\b""", RegexOption.IGNORE_CASE),
+            Regex("""(?:کم|Low)[ \t:=-]{1,10}([0-9]+)\b""", RegexOption.IGNORE_CASE)
         ))
+
         val subdomains = firstInt(combined, listOf(
-            Regex("""(?:زیردامنه|Subdomains?)[^0-9]{0,18}([0-9]+)""", RegexOption.IGNORE_CASE),
-            Regex("""([0-9]+)[ ]*(?:زیردامنه|Subdomains?)""", RegexOption.IGNORE_CASE)
+            Regex("""(?:زیردامنه|Subdomains?)[^0-9\n]{0,18}([0-9]+)""", RegexOption.IGNORE_CASE),
+            Regex("""([0-9]+)[ \t]*(?:زیردامنه|Subdomains?)""", RegexOption.IGNORE_CASE)
         ))
-        val cvss = Regex("""CVSS[^0-9]{0,20}([0-9]{1,2}(?:[.][0-9])?)""", RegexOption.IGNORE_CASE)
+
+        val scanId = Regex("""(?:scan[_ -]?(?:id)?|شناسه[ \t]*اسکن)[ \t:=-]{0,8}([A-Za-z0-9-]{8,40})""", RegexOption.IGNORE_CASE)
             .find(combined)?.groupValues?.get(1)
-            ?: Regex("""([0-9]{1,2}[.][0-9])[^0-9]{0,12}CVSS""", RegexOption.IGNORE_CASE)
+            ?: Regex("""([a-f0-9]{16,32})[ \t]*(?:اسکن\s*شناسه|Scan\s*ID)""", RegexOption.IGNORE_CASE)
                 .find(combined)?.groupValues?.get(1)
-        val scanId = Regex("""(?:scan[_ -]?(?:id)?|شناسه[ ]*اسکن)[^A-Za-z0-9]{0,8}([A-Za-z0-9-]{8,40})""", RegexOption.IGNORE_CASE)
-            .find(combined)?.groupValues?.get(1)
             ?: Regex("""[a-f0-9]{16,32}""", RegexOption.IGNORE_CASE).find(combined)?.value
+
+        val posture = when {
+            Regex("""(?:OVERALL POSTURE|وضعیت کلی امنیت)\s*(?:WEAK|ضعیف)""", RegexOption.IGNORE_CASE).containsMatchIn(combined) -> "ضعیف (WEAK)"
+            Regex("""(?:OVERALL POSTURE|وضعیت کلی امنیت)\s*(?:CRITICAL|بحرانی)""", RegexOption.IGNORE_CASE).containsMatchIn(combined) -> "بحرانی (CRITICAL)"
+            Regex("""(?:OVERALL POSTURE|وضعیت کلی امنیت)\s*(?:MODERATE|MEDIUM|متوسط)""", RegexOption.IGNORE_CASE).containsMatchIn(combined) -> "متوسط (MODERATE)"
+            Regex("""(?:OVERALL POSTURE|وضعیت کلی امنیت)\s*(?:STRONG|GOOD|قوی|مناسب)""", RegexOption.IGNORE_CASE).containsMatchIn(combined) -> "مناسب (STRONG)"
+            else -> null
+        }
+
+        // Parse Proven Findings (Finding 1 and Finding 2)
+        val finding1 = parseProvenFindingBlock(combined, 1)
+        val finding2 = parseProvenFindingBlock(combined, 2)
 
         val lines = combined.lines().map { it.trim() }.filter { it.length > 8 }
         val issueWords = listOf(
-            "DMARC", "SPF", "DKIM", "HSTS", "CSP", "TLS", "SSL", "X-Frame-Options",
-            "SQL Injection", "XSS", "Open Redirect", "CORS", "Subdomain Takeover",
+            "DMARC", "SPF", "DKIM", "HSTS", "CSP", "Content-Security-Policy", "TLS", "SSL",
+            "X-Frame-Options", "SQL Injection", "XSS", "Open Redirect", "CORS", "Subdomain Takeover",
             "نفوذ", "آسیب", "تزریق", "جعل", "نشت", "پیکربندی"
         )
-        val title = lines.firstOrNull { l -> issueWords.any { l.contains(it, ignoreCase = true) } }
-            ?.take(180)
-        val impact = labelledLine(lines, listOf("تاثیر", "پیامد", "Impact", "Consequence", "Risk"))
-        val solution = labelledLine(lines, listOf("راه حل", "راهکار", "رفع", "Remediation", "Solution", "Fix"))
+        val fallbackTitle = lines.firstOrNull { l ->
+            issueWords.any { l.contains(it, ignoreCase = true) } &&
+                !l.startsWith("REPRODUCE", true) && !l.startsWith("curl", true) && !l.startsWith("dig", true)
+        }?.take(180)
+        val fallbackCvss = Regex("""CVSS[^0-9\n]{0,20}([0-9]{1,2}(?:[.][0-9])?)""", RegexOption.IGNORE_CASE)
+            .find(combined)?.groupValues?.get(1)
+            ?: Regex("""([0-9]{1,2}[.][0-9])[ \t]*CVSS""", RegexOption.IGNORE_CASE)
+                .find(combined)?.groupValues?.get(1)
+        val fallbackImpact = labelledLine(lines, listOf("Impact:", "تاثیر:", "پیامد:", "Consequence:"))
+        val fallbackSolution = labelledLine(lines, listOf("RECOMMENDED FIX", "راه حل پیشنهادی", "راهحل پیشنهادی", "Remediation:", "Solution:"))
+
+        // Business threat exposure percentages
+        val infraExp = firstDecimalPercent(combined, listOf(
+            Regex("""Infrastructure[^\n]{0,45}?([0-9]{1,3}(?:\.[0-9]+)?)%""", RegexOption.IGNORE_CASE),
+            Regex("""زیرساخت[^\n]{0,45}?([0-9]{1,3}(?:\.[0-9]+)?)%""")
+        ))
+        val dataExp = firstDecimalPercent(combined, listOf(
+            Regex("""Data\s*breach[^\n]{0,45}?([0-9]{1,3}(?:\.[0-9]+)?)%""", RegexOption.IGNORE_CASE),
+            Regex("""نشت\s*داده[^\n]{0,45}?([0-9]{1,3}(?:\.[0-9]+)?)%""")
+        ))
+        val clientExp = firstDecimalPercent(combined, listOf(
+            Regex("""Client-side[^\n]{0,45}?([0-9]{1,3}(?:\.[0-9]+)?)%""", RegexOption.IGNORE_CASE),
+            Regex("""سمت\s*کلاینت[^\n]{0,45}?([0-9]{1,3}(?:\.[0-9]+)?)%""")
+        ))
+        val threatExposure = listOfNotNull(
+            clientExp?.let { "سمت کلاینت (XSS/فیشینگ): $it%" },
+            dataExp?.let { "نشت داده / جعل ایمیل: $it%" },
+            infraExp?.let { "زیرساخت (نفوذ/باج‌افزار): $it%" }
+        ).takeIf { it.isNotEmpty() }?.joinToString(" | ")
+
+        // Security Vectors
+        val vectorMatches = listOf(
+            "Email Auth" to Regex("""Email\s*Auth\s*([0-9]{1,3})%""", RegexOption.IGNORE_CASE),
+            "Headers" to Regex("""Headers\s*([0-9]{1,3})%""", RegexOption.IGNORE_CASE),
+            "Cookies" to Regex("""Cookies\s*([0-9]{1,3})%""", RegexOption.IGNORE_CASE),
+            "SSL/TLS" to Regex("""SSL/TLS\s*([0-9]{1,3})%""", RegexOption.IGNORE_CASE),
+            "Data Leak" to Regex("""Data\s*Leak\s*([0-9]{1,3})%""", RegexOption.IGNORE_CASE),
+            "Network" to Regex("""Network\s*([0-9]{1,3})%""", RegexOption.IGNORE_CASE)
+        ).mapNotNull { (label, rx) ->
+            rx.find(combined)?.groupValues?.getOrNull(1)?.let { "$label $it%" }
+        }
+        val securityVectors = vectorMatches.takeIf { it.isNotEmpty() }?.joinToString(" | ")
+
+        // OWASP Top 10 non-zero counts
+        val owaspItems = mutableListOf<String>()
+        val owaspRx = Regex("""(A0[1-9]|A10)\b[^\n]{0,45}?\b([1-9][0-9]*)\b""")
+        val seenOwasp = linkedSetOf<String>()
+        for (m in owaspRx.findAll(combined)) {
+            val code = m.groupValues[1].uppercase()
+            val cnt = m.groupValues[2].toIntOrNull() ?: continue
+            if (cnt in 1..99 && seenOwasp.add(code)) {
+                owaspItems.add("$code: $cnt")
+            }
+        }
+        val owaspSummary = owaspItems.takeIf { it.isNotEmpty() }?.joinToString("، ")
+
+        // Locked summary
+        val lockedSummary = Regex("""([0-9]+)\s*more\s*finding\(s\)\s*are\s*locked[^\n.:]{0,20}:\s*([^\n.]+)""", RegexOption.IGNORE_CASE)
+            .find(combined)?.let { m -> "${m.groupValues[1]} یافته قفل (${m.groupValues[2].trim()})" }
+            ?: Regex("""([0-9]+)\s*یافته[‌\s]*ی?\s*بیشتر[^\n:]{0,35}قفل\s*است\s*:\s*([^\n.]+)""")
+                .find(combined)?.let { m -> "${m.groupValues[1]} یافته قفل (${m.groupValues[2].trim()})" }
+
+        // WAF status
+        val wafStatus = when {
+            Regex("""WAF\s*LAYER\s*NOT\s*DETECTED""", RegexOption.IGNORE_CASE).containsMatchIn(combined) -> "بدون لایه WAF (NOT DETECTED)"
+            Regex("""WAF\s*LAYER\s*DETECTED""", RegexOption.IGNORE_CASE).containsMatchIn(combined) -> "WAF فعال (DETECTED)"
+            else -> null
+        }
 
         return ReportData(
             domain = domain,
@@ -420,19 +540,91 @@ object ReportReader {
             high = high,
             medium = medium,
             low = low,
-            freeFindingTitle = title,
-            freeFindingCvss = cvss,
-            freeFindingImpact = impact,
-            freeFindingSolution = solution,
-            subdomains = subdomains
+            freeFindingTitle = finding1?.title ?: fallbackTitle,
+            freeFindingCvss = finding1?.cvss ?: fallbackCvss,
+            freeFindingImpact = finding1?.impact ?: fallbackImpact,
+            freeFindingSolution = finding1?.fix ?: fallbackSolution,
+            subdomains = subdomains,
+            posture = posture,
+            secondaryFindingTitle = finding2?.title,
+            secondaryFindingCvss = finding2?.cvss,
+            secondaryFindingImpact = finding2?.impact,
+            secondaryFindingSolution = finding2?.fix,
+            threatExposure = threatExposure,
+            securityVectors = securityVectors,
+            owaspSummary = owaspSummary,
+            lockedSummary = lockedSummary,
+            wafStatus = wafStatus
         )
+    }
+
+    private data class ParsedProvenFinding(
+        val title: String?,
+        val cvss: String?,
+        val impact: String?,
+        val fix: String?
+    )
+
+    private fun parseProvenFindingBlock(combined: String, index: Int): ParsedProvenFinding? {
+        val startRx = if (index == 1) {
+            Regex("""(?:PROVEN FINDING\s*(?:#\s*1|1\s*OF\s*2)|یافته[‌\s]*ی?\s*اثبات\s*شده\s*(?:#\s*1|1\s*از\s*2))""", RegexOption.IGNORE_CASE)
+        } else {
+            Regex("""(?:PROVEN FINDING\s*(?:#\s*2|2\s*OF\s*2)|یافته[‌\s]*ی?\s*اثبات\s*شده\s*(?:#\s*2|2\s*از\s*2))""", RegexOption.IGNORE_CASE)
+        }
+        val startMatch = startRx.find(combined) ?: return null
+        val tail = combined.substring(startMatch.range.first)
+        val endRx = if (index == 1) {
+            Regex("""(?:PROVEN FINDING\s*(?:#\s*2|2\s*OF\s*2)|یافته[‌\s]*ی?\s*اثبات\s*شده\s*(?:#\s*2|2\s*از\s*2)|02\s+Business threat exposure)""", RegexOption.IGNORE_CASE)
+        } else {
+            Regex("""(?:02\s+Business threat exposure|Business threat exposure|02\s+میزان مواجهه|SaliSecure Core)""", RegexOption.IGNORE_CASE)
+        }
+        val endMatch = endRx.find(tail, startIndex = 10)
+        val block = if (endMatch != null) tail.substring(0, endMatch.range.first) else tail.take(1500)
+        val lines = block.lines().map { it.trim() }.filter { it.isNotBlank() }
+
+        val topChunk = lines.take(4).joinToString(" ")
+        val cvss = Regex("""CVSS[^0-9\n]{0,8}([0-9]{1,2}(?:\.[0-9])?)""", RegexOption.IGNORE_CASE)
+            .find(topChunk)?.groupValues?.get(1)
+            ?: Regex("""([0-9]{1,2}\.[0-9])[ \t]*CVSS""", RegexOption.IGNORE_CASE)
+                .find(topChunk)?.groupValues?.get(1)
+
+        // Title is typically the next meaningful line right after the PROVEN FINDING header
+        val title = lines.drop(1).firstOrNull { l ->
+            !l.equals("WHY IT MATTERS", true) &&
+                !l.equals("چرا مهم است", true) &&
+                !l.startsWith("MEDIUM", true) &&
+                !l.startsWith("HIGH", true) &&
+                !l.startsWith("CRITICAL", true) &&
+                !l.startsWith("LOW", true) &&
+                l.length > 4
+        }?.take(180)
+
+        val impact = labelledLine(lines, listOf("Impact:", "تاثیر:", "What could happen:"))
+        val fixIdx = lines.indexOfFirst {
+            it.equals("RECOMMENDED FIX", true) || it.contains("راهحل پیشنهادی") || it.contains("راه حل پیشنهادی")
+        }
+        val fix = if (fixIdx >= 0 && fixIdx + 1 < lines.size) {
+            lines[fixIdx + 1].take(200)
+        } else {
+            labelledLine(lines, listOf("RECOMMENDED FIX", "راهحل پیشنهادی", "راه حل پیشنهادی", "HOW TO FIX:"))
+        }
+        return ParsedProvenFinding(title, cvss, impact, fix)
+    }
+
+    private fun firstDecimalPercent(text: String, patterns: List<Regex>): String? {
+        for (p in patterns) {
+            val raw = p.find(text)?.groupValues?.getOrNull(1)?.trim() ?: continue
+            val d = raw.toDoubleOrNull() ?: continue
+            if (d in 0.0..100.0) return raw
+        }
+        return null
     }
 
     private fun labelledLine(lines: List<String>, labels: List<String>): String? {
         for (l in lines) {
             for (k in labels) {
                 val i = l.indexOf(k, ignoreCase = true)
-                if (i >= 0 && l.length > i + k.length + 6) {
+                if (i >= 0 && l.length > i + k.length + 5) {
                     return l.substring(i).take(220)
                 }
             }
@@ -459,29 +651,11 @@ object ReportReader {
                     '٠' -> '0'; '١' -> '1'; '٢' -> '2'; '٣' -> '3'; '٤' -> '4'
                     '٥' -> '5'; '٦' -> '6'; '٧' -> '7'; '٨' -> '8'; '٩' -> '9'
                     'أ', 'إ', 'آ' -> 'ا'; 'ة' -> 'ه'; 'ي', 'ى' -> 'ی'; 'ك' -> 'ک'
+                    '\u200C', '\u200F', '\u200E' -> ' '
                     else -> ch
                 }
             )
         }
         return sb.toString().replace(Regex("""[ \t]+"""), " ")
-    }
-
-    private fun merge(base: ReportData?, extra: ReportData?): ReportData? {
-        if (base == null) return extra
-        if (extra == null) return base
-        return base.copy(
-            scanId = base.scanId ?: extra.scanId,
-            score = base.score ?: extra.score,
-            findings = base.findings ?: extra.findings,
-            critical = base.critical ?: extra.critical,
-            high = base.high ?: extra.high,
-            medium = base.medium ?: extra.medium,
-            low = base.low ?: extra.low,
-            freeFindingTitle = base.freeFindingTitle ?: extra.freeFindingTitle,
-            freeFindingCvss = base.freeFindingCvss ?: extra.freeFindingCvss,
-            freeFindingImpact = base.freeFindingImpact ?: extra.freeFindingImpact,
-            freeFindingSolution = base.freeFindingSolution ?: extra.freeFindingSolution,
-            subdomains = base.subdomains ?: extra.subdomains
-        )
     }
 }

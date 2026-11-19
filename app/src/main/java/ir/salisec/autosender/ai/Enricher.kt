@@ -12,14 +12,17 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
-/** You.com Search API enrichment: PUBLIC, COMPANY-LEVEL context only.
- *
- *  - Two-tier cache: in-memory + Room (`company_cache`, 7-day TTL)
- *  - Bilingual Persian + English company/product queries for maximum relevance
- *  - Never caches transient errors; degrades gracefully */
+/**
+ * Multi-signal Company & Business Intelligence Enrichment (PUBLIC COMPANY-LEVEL ONLY):
+ *  1. Live bounded HTTPS website snapshot (title, meta/OG description, H1/H2, core product/service text)
+ *  2. Multi-angle You.com Search API queries (overview/products + site: pricing/customers/trust)
+ *  3. Two-tier cache: in-memory + Room (`company_cache`, 7-day TTL)
+ *  4. Works gracefully even if You.com key is absent (site snapshot) or site blocks bots (You.com)
+ */
 class Enricher(
     private val client: OkHttpClient,
     private val cacheDao: CompanyCacheDao? = null
@@ -49,7 +52,12 @@ class Enricher(
                 .post(payload.toRequestBody("application/json".toMediaType()))
                 .build()
             val t0 = System.currentTimeMillis()
-            client.newBuilder().callTimeout(20, TimeUnit.SECONDS).build().newCall(req).execute().use { resp ->
+            val testClient = client.newBuilder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(20, TimeUnit.SECONDS)
+                .callTimeout(25, TimeUnit.SECONDS)
+                .build()
+            testClient.newCall(req).execute().use { resp ->
                 val dt = System.currentTimeMillis() - t0
                 val raw = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
@@ -68,7 +76,9 @@ class Enricher(
         domain: String,
         forceRefresh: Boolean = false
     ): CompanyContext = withContext(Dispatchers.IO) {
-        val cleanDomain = domain.trim().lowercase()
+        val cleanDomain = domain.trim().lowercase().removePrefix("www.").trimEnd('.')
+        if (cleanDomain.isBlank()) return@withContext CompanyContext("", "")
+
         if (!forceRefresh) {
             cache[cleanDomain]?.takeIf { it.summary.isNotBlank() }?.let { return@withContext it }
             val persisted = try {
@@ -87,22 +97,66 @@ class Enricher(
             }
         }
 
-        if (s.youKey.isBlank() || s.youEndpoint.isBlank()) {
-            return@withContext CompanyContext(cleanDomain, "")
+        val siteInsight = fetchLiveSiteSnapshot(cleanDomain)
+        val hasYou = s.youKey.isNotBlank() && s.youEndpoint.isNotBlank()
+
+        var youOverview = ""
+        var youDeep = ""
+        val sources = mutableListOf<String>()
+        if (siteInsight != null) sources.add(siteInsight.url)
+
+        if (hasYou) {
+            // Query 1: Broad company identity, core services/products, revenue model & audience
+            val primaryQuery = "\"$cleanDomain\" (درباره OR خدمات OR محصولات OR خرید OR تعرفه OR about OR services OR products OR pricing OR platform)"
+            val r1 = runSearch(s, primaryQuery)
+            if (r1 != null && r1.first.isNotBlank()) {
+                youOverview = sanitize(r1.first)
+                sources.addAll(r1.second)
+            } else {
+                val fallback = runSearch(s, "\"$cleanDomain\"")
+                if (fallback != null && fallback.first.isNotBlank()) {
+                    youOverview = sanitize(fallback.first)
+                    sources.addAll(fallback.second)
+                }
+            }
+
+            // Query 2: Deeper site-scoped pages (checkout/order/API/trust/customers) when overview is sparse
+            if (youOverview.length < 700 || siteInsight == null) {
+                val deepQuery = "site:$cleanDomain (خرید OR ثبت سفارش OR پنل OR API OR پرداخت OR مشتریان OR قیمت OR درباره ما OR checkout OR login)"
+                val r2 = runSearch(s, deepQuery)
+                if (r2 != null && r2.first.isNotBlank()) {
+                    youDeep = sanitize(r2.first)
+                    sources.addAll(r2.second)
+                }
+            }
         }
 
-        // Targeted bilingual business & offerings search
-        val primaryQuery = "\"$cleanDomain\" (about OR services OR products OR customers OR درباره OR خدمات OR محصولات OR فروش)"
-        val first = runSearch(s, primaryQuery)
-        val finalPair = if (first != null && first.first.isNotBlank()) {
-            first
-        } else {
-            runSearch(s, "\"$cleanDomain\"")
+        val sections = buildList {
+            if (siteInsight != null) {
+                val siteParts = buildList {
+                    if (siteInsight.title.isNotBlank()) add("عنوان وب‌سایت: ${siteInsight.title}")
+                    if (siteInsight.description.isNotBlank()) add("معرفی رسمی سایت: ${siteInsight.description}")
+                    if (siteInsight.headings.isNotBlank()) add("بخش‌های کلیدی و خدمات: ${siteInsight.headings}")
+                    if (siteInsight.bodyExcerpt.isNotBlank()) add("محتوای صفحه اصلی: ${siteInsight.bodyExcerpt}")
+                    if (siteInsight.signals.isNotBlank()) add("شاخص‌های حساسیت کسب‌وکار: ${siteInsight.signals}")
+                }
+                if (siteParts.isNotEmpty()) {
+                    add("[اطلاعات زنده وب‌سایت $cleanDomain]\n" + siteParts.joinToString("\n"))
+                }
+            }
+            if (youOverview.isNotBlank()) {
+                add("[تحلیل عمومی وب و You.com]\n${youOverview.take(1050)}")
+            }
+            if (youDeep.isNotBlank() && !youOverview.contains(youDeep.take(60))) {
+                add("[جزئیات صفحات و خدمات $cleanDomain]\n${youDeep.take(750)}")
+            }
         }
 
-        val ctx = if (finalPair != null && finalPair.first.isNotBlank()) {
-            val cleanSummary = sanitize(finalPair.first).take(1500)
-            CompanyContext(cleanDomain, cleanSummary, finalPair.second).also { res ->
+        val combinedSummary = sections.joinToString("\n\n").trim().take(2600)
+        val uniqueSources = sources.distinct().take(6)
+
+        if (combinedSummary.isNotBlank()) {
+            CompanyContext(cleanDomain, combinedSummary, uniqueSources).also { res ->
                 cache[cleanDomain] = res
                 try {
                     val srcJson = JSONArray().apply { res.sources.forEach { put(it) } }.toString()
@@ -110,10 +164,145 @@ class Enricher(
                 } catch (_: Exception) { }
             }
         } else {
-            CompanyContext(cleanDomain, "")
+            CompanyContext(cleanDomain, "", uniqueSources)
         }
-        ctx
     }
+
+    internal data class SiteSnapshot(
+        val url: String,
+        val title: String,
+        val description: String,
+        val headings: String,
+        val bodyExcerpt: String,
+        val signals: String
+    )
+
+    private fun fetchLiveSiteSnapshot(cleanDomain: String): SiteSnapshot? {
+        val webClient = client.newBuilder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(12, TimeUnit.SECONDS)
+            .callTimeout(15, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .build()
+
+        for (candidateUrl in listOf("https://$cleanDomain", "https://www.$cleanDomain")) {
+            try {
+                val req = Request.Builder()
+                    .url(candidateUrl)
+                    .header("User-Agent", "Mozilla/5.0 (compatible; SaliSecAudit/2.0; +https://salisec.ir)")
+                    .header("Accept", "text/html,application/xhtml+xml")
+                    .header("Accept-Language", "fa,en;q=0.9")
+                    .get()
+                    .build()
+                webClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) continue
+                    val contentType = resp.header("Content-Type").orEmpty().lowercase()
+                    if (contentType.isNotBlank() && !contentType.contains("html") && !contentType.contains("text")) {
+                        continue
+                    }
+                    val html = resp.body?.byteStream()?.use { readBoundedUtf8(it, 180 * 1024) }.orEmpty()
+                    if (html.isBlank()) continue
+                    val parsed = parseHtmlSnapshot(resp.request.url.toString(), html)
+                    if (parsed != null) return parsed
+                }
+            } catch (_: Exception) {
+                continue
+            }
+        }
+        return null
+    }
+
+    internal fun parseHtmlSnapshot(url: String, html: String): SiteSnapshot? {
+        val title = sanitize(
+            decodeEntities(
+                Regex("(?is)<title[^>]*>(.*?)</title>").find(html)?.groupValues?.getOrNull(1).orEmpty()
+            )
+        ).take(160)
+
+        val metaDesc = listOf(
+            Regex("""(?is)<meta[^>]+(?:name|property)\s*=\s*["'](?:description|og:description)["'][^>]+content\s*=\s*["'](.*?)["']"""),
+            Regex("""(?is)<meta[^>]+content\s*=\s*["'](.*?)["'][^>]+(?:name|property)\s*=\s*["'](?:description|og:description)["']""")
+        ).firstNotNullOfOrNull { rx ->
+            rx.find(html)?.groupValues?.getOrNull(1)?.let { sanitize(decodeEntities(it)) }?.takeIf { it.length > 12 }
+        }.orEmpty().take(320)
+
+        val headingMatches = Regex("(?is)<h[12][^>]*>(.*?)</h[12]>")
+            .findAll(html)
+            .map { sanitize(stripTags(decodeEntities(it.groupValues[1]))) }
+            .filter { it.length in 5..110 }
+            .distinct()
+            .take(5)
+            .toList()
+        val headings = headingMatches.joinToString(" • ").take(360)
+
+        val strippedBody = sanitize(
+            stripTags(
+                decodeEntities(
+                    html.replace(Regex("(?is)<script[^>]*>.*?</script>"), " ")
+                        .replace(Regex("(?is)<style[^>]*>.*?</style>"), " ")
+                        .replace(Regex("(?is)<noscript[^>]*>.*?</noscript>"), " ")
+                        .replace(Regex("(?is)<nav[^>]*>.*?</nav>"), " ")
+                )
+            )
+        )
+        val bodyExcerpt = strippedBody.take(520)
+
+        val lowerAll = (title + " " + metaDesc + " " + headings + " " + strippedBody).lowercase()
+        val signalList = buildList {
+            if (listOf("پرداخت", "درگاه", "سبد خرید", "فروشگاه", "خرید", "سفارش", "checkout", "cart", "shop", "pricing")
+                    .any { lowerAll.contains(it) }
+            ) add("فروش آنلاین / پرداخت و ثبت سفارش")
+            if (listOf("ورود", "ثبت نام", "ثبت‌نام", "پنل", "حساب کاربری", "login", "dashboard", "account", "otp")
+                    .any { lowerAll.contains(it) }
+            ) add("پنل کاربری / ورود و احراز هویت کاربران")
+            if (listOf("api", "saas", "بستر", "پلتفرم", "سرویس", "cloud", "نرم‌افزار")
+                    .any { lowerAll.contains(it) }
+            ) add("سرویس نرم‌افزاری / پلتفرم یا API")
+            if (listOf("بیمه", "بانک", "مالی", "ارز", "صرافی", "اعتبار", "درمان", "پزشکی", "کلینیک")
+                    .any { lowerAll.contains(it) }
+            ) add("داده‌های مالی یا حساس مشتریان")
+        }
+
+        if (title.isBlank() && metaDesc.isBlank() && headings.isBlank() && bodyExcerpt.length < 40) {
+            return null
+        }
+        return SiteSnapshot(
+            url = url,
+            title = title,
+            description = metaDesc,
+            headings = headings,
+            bodyExcerpt = bodyExcerpt,
+            signals = signalList.joinToString("، ")
+        )
+    }
+
+    private fun readBoundedUtf8(ins: java.io.InputStream, maxBytes: Int): String {
+        val out = ByteArrayOutputStream(minOf(maxBytes, 16 * 1024))
+        val buf = ByteArray(8 * 1024)
+        var total = 0
+        while (total < maxBytes) {
+            val n = ins.read(buf, 0, minOf(buf.size, maxBytes - total))
+            if (n <= 0) break
+            out.write(buf, 0, n)
+            total += n
+        }
+        return String(out.toByteArray(), Charsets.UTF_8)
+    }
+
+    private fun stripTags(raw: String): String = raw
+        .replace(Regex("(?s)<[^>]+>"), " ")
+        .replace(Regex("""\s{2,}"""), " ")
+        .trim()
+
+    private fun decodeEntities(raw: String): String = raw
+        .replace("&nbsp;", " ")
+        .replace("&zwnj;", "\u200C")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x200c;", "\u200C")
 
     private fun runSearch(s: Settings, query: String): Pair<String, List<String>>? = try {
         val payload = JSONObject()
@@ -126,7 +315,12 @@ class Enricher(
             .header("Content-Type", "application/json")
             .post(payload.toRequestBody("application/json".toMediaType()))
             .build()
-        client.newBuilder().callTimeout(30, TimeUnit.SECONDS).build().newCall(req).execute().use { resp ->
+        val searchClient = client.newBuilder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(25, TimeUnit.SECONDS)
+            .callTimeout(30, TimeUnit.SECONDS)
+            .build()
+        searchClient.newCall(req).execute().use { resp ->
             val raw = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) null else parse(raw)
         }
@@ -160,7 +354,7 @@ class Enricher(
             try {
                 val wrapper = JSONObject().put("r", JSONArray(text))
                 collectStrings(wrapper, chunks, 0)
-            } catch (ignored: Exception) {
+            } catch (_: Exception) {
                 // leave empty
             }
         }

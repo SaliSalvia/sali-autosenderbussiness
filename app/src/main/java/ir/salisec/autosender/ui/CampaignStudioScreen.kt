@@ -83,6 +83,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.documentfile.provider.DocumentFile
@@ -148,6 +149,22 @@ fun CampaignStudioScreen(
     var previewHtmlItem by remember { mutableStateOf<CampaignDraftItem?>(null) }
     var showTemplatesDialog by remember { mutableStateOf(false) }
     var approvingKeys by remember { mutableStateOf(emptySet<String>()) }
+    var refreshingDomains by remember { mutableStateOf(emptySet<String>()) }
+
+    fun refreshCompanyContext(domain: String) {
+        if (refreshingDomains.contains(domain)) return
+        scope.launch {
+            refreshingDomains = refreshingDomains + domain
+            try {
+                val fresh = app.enricher.enrich(app.prefs.load(), domain, forceRefresh = true)
+                if (fresh.summary.isNotBlank()) {
+                    app.session.contexts.update { it + (domain to fresh) }
+                }
+            } finally {
+                refreshingDomains = refreshingDomains - domain
+            }
+        }
+    }
 
     BackHandler(enabled = step == 1) { step = 0 }
 
@@ -896,7 +913,7 @@ fun CampaignStudioScreen(
             }
 
             BigButton(
-                text = "مرحله بعد: سرچ You.com و طراحی پیام (${selected.size} مخاطب)",
+                text = "مرحله بعد: تحلیل و طراحی پیام (${selected.size} مخاطب)",
                 enabled = selected.isNotEmpty() && !scanning,
                 icon = Icons.Default.AutoAwesome,
                 modifier = Modifier.testTag("campaign_next_step")
@@ -904,7 +921,7 @@ fun CampaignStudioScreen(
                 prepareDraftsAndGoToStep2()
             }
         } else {
-            // STEP 2: You.com + hcnsec Strongest Model + 4 Reference Templates + Review/Approve
+            // STEP 2: Deep Business Intelligence + hcnsec Strongest Model + 2 Latest PDFs + 4 Reference Templates
             val contextsMap by app.session.contexts.collectAsState()
             val currentSettings = app.prefs.load()
             val tplCount = currentSettings.referenceTemplates().size
@@ -915,7 +932,7 @@ fun CampaignStudioScreen(
             Section(
                 header = "تنظیم سبک، ۴ الگوی مرجع و تولید هوشمند",
                 icon = Icons.Default.AutoAwesome,
-                badge = if (activeModelLabel.isNotBlank()) activeModelLabel else "انتخاب خودکار قوی‌ترین مدل",
+                badge = if (activeModelLabel.isNotBlank()) ltrIsolate(activeModelLabel) else "انتخاب خودکار قوی‌ترین مدل",
                 badgeColor = if (activeModelLabel.isNotBlank()) GreenOk else OrangeWarn
             ) {
                 FlowRow(
@@ -933,7 +950,10 @@ fun CampaignStudioScreen(
                     }
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     listOf(
                         "BUSINESS" to "فروش B2B",
                         "TECHNICAL" to "فنی / CTO",
@@ -947,7 +967,7 @@ fun CampaignStudioScreen(
                                     if (!it.generated) it.copy(style = code) else it
                                 }
                             },
-                            label = { Text(label) }
+                            label = { Text(label, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                         )
                     }
                 }
@@ -955,7 +975,7 @@ fun CampaignStudioScreen(
                 if (currentSettings.hcnsKey.isBlank() || currentSettings.youKey.isBlank()) {
                     Chip(
                         if (currentSettings.hcnsKey.isBlank()) "کلید hcnsec وارد نشده است (کلیک برای تنظیمات)"
-                        else "کلید You.com وارد نشده (فقط از PDF استفاده می‌شود)",
+                        else "کلید You.com خالی است (تحلیل از وب‌سایت زنده + ۲ PDF انجام می‌شود)",
                         if (currentSettings.hcnsKey.isBlank()) RedErr else OrangeWarn,
                         onClick = onOpenSettings
                     )
@@ -963,7 +983,7 @@ fun CampaignStudioScreen(
 
                 BigButton(
                     text = if (batchGenerating) batchProgressText.ifBlank { "در حال تولید..." }
-                    else "سرچ You.com + طراحی همه پیام‌ها (${drafts.size})",
+                    else "تحلیل هوشمند و طراحی پیام‌ها (${drafts.size})",
                     loading = batchGenerating,
                     enabled = drafts.isNotEmpty(),
                     icon = Icons.Default.AutoAwesome,
@@ -1020,6 +1040,7 @@ fun CampaignStudioScreen(
                     DraftReviewCard(
                         item = item,
                         approving = approvingKeys.contains(item.key),
+                        refreshingContext = refreshingDomains.contains(item.domain),
                         companySummary = contextsMap[item.domain]?.summary.orEmpty(),
                         onStyle = { st -> updateDraft(item.key) { it.copy(style = st) } },
                         onSubject = { v ->
@@ -1035,6 +1056,7 @@ fun CampaignStudioScreen(
                         onPreheader = { v -> updateDraft(item.key) { it.copy(preheader = v) } },
                         onBody = { v -> updateDraft(item.key) { it.copy(body = v) } },
                         onOpenPdf = { uri -> openPdfPreview(uri) },
+                        onRefreshContext = { refreshCompanyContext(item.domain) },
                         onPreviewHtml = { previewHtmlItem = item },
                         onSendTestToSelf = {
                             scope.launch {
@@ -1157,8 +1179,8 @@ private fun MatchCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(m.email, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        SubTitle("دامنه: ${m.domain}" + (m.folderName?.let { " • پوشه: $it" } ?: " • پوشه یافت نشد"))
+                        Text(ltrIsolate(m.email), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        SubTitle("دامنه: ${ltrIsolate(m.domain)}" + (m.folderName?.let { " • پوشه: ${ltrIsolate(it)}" } ?: " • پوشه یافت نشد"))
                     }
                     if (m.readyForApproval) {
                         Chip("${m.attachmentNames.size} PDF آماده", GreenOk)
@@ -1178,7 +1200,7 @@ private fun MatchCard(
                     m.report?.findings?.let { Chip("$it یافته", MaterialTheme.colorScheme.primary) }
                     m.bundle.trialAttachments.forEach { pdf ->
                         val sizeMb = String.format(java.util.Locale.US, "%.2f MB", pdf.sizeBytes / (1024.0 * 1024.0))
-                        Chip("${pdf.name} (${pdf.pages ?: "?"} ص • $sizeMb)", GreenOk, onClick = { onOpenPdf(pdf.uri) })
+                        Chip("${ltrIsolate(pdf.name)} (${pdf.pages ?: "?"} ص • $sizeMb)", GreenOk, onClick = { onOpenPdf(pdf.uri) })
                     }
                 }
 
@@ -1195,6 +1217,7 @@ private fun MatchCard(
 private fun DraftReviewCard(
     item: CampaignDraftItem,
     approving: Boolean,
+    refreshingContext: Boolean,
     companySummary: String,
     onStyle: (String) -> Unit,
     onSubject: (String) -> Unit,
@@ -1202,12 +1225,15 @@ private fun DraftReviewCard(
     onPreheader: (String) -> Unit,
     onBody: (String) -> Unit,
     onOpenPdf: (String) -> Unit,
+    onRefreshContext: () -> Unit,
     onPreviewHtml: () -> Unit,
     onSendTestToSelf: () -> Unit,
     onRegenerate: () -> Unit,
     onApprove: () -> Unit
 ) {
     var expanded by remember(item.key, item.generated) { mutableStateOf(!item.approved) }
+    var summaryExpanded by remember(item.key) { mutableStateOf(false) }
+    val report = item.match.report
 
     Surface(
         shape = RoundedCornerShape(18.dp),
@@ -1231,10 +1257,10 @@ private fun DraftReviewCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(item.email, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(ltrIsolate(item.email), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     SubTitle(
-                        item.domain +
-                            (item.modelUsed.takeIf { it.isNotBlank() }?.let { " • $it" } ?: "") +
+                        ltrIsolate(item.domain) +
+                            (item.modelUsed.takeIf { it.isNotBlank() }?.let { " • ${ltrIsolate(it)}" } ?: "") +
                             (if (item.totalTokens > 0) " • ${item.totalTokens} توکن" else "") +
                             (item.subject.takeIf { it.isNotBlank() }?.let { " • $it" } ?: "")
                     )
@@ -1260,7 +1286,7 @@ private fun DraftReviewCard(
 
             AnimatedVisibility(visible = expanded) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Verified bilingual two-page trial pair preview (tappable to open in-app PDF viewer)
+                    // Verified bilingual two-page trial pair (strictly 2 newest PDFs)
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -1277,7 +1303,7 @@ private fun DraftReviewCard(
                                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Icon(Icons.Default.AttachFile, contentDescription = null, modifier = Modifier.size(14.dp))
-                                    Text(pdf.name, style = MaterialTheme.typography.labelSmall)
+                                    Text(ltrIsolate(pdf.name), style = MaterialTheme.typography.labelSmall)
                                 }
                             }
                         }
@@ -1292,26 +1318,115 @@ private fun DraftReviewCard(
                         }
                     }
 
-                    if (companySummary.isNotBlank()) {
+                    // Parsed security facts from the 2 newest PDFs
+                    if (report != null) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "یافته‌های استخراج‌شده از ۲ PDF اخیر",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    report.score?.let { sc ->
+                                        val lbl = if (!report.posture.isNullOrBlank()) "$sc/100 (${report.posture})" else "$sc/100"
+                                        Chip(lbl, if (sc < 60) RedErr else OrangeWarn)
+                                    }
+                                }
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    report.findings?.let { Chip("$it یافته کل", MaterialTheme.colorScheme.primary) }
+                                    report.critical?.takeIf { it > 0 }?.let { Chip("$it بحرانی", RedErr) }
+                                    report.high?.takeIf { it > 0 }?.let { Chip("$it زیاد", OrangeWarn) }
+                                    report.medium?.takeIf { it > 0 }?.let { Chip("$it متوسط", OrangeWarn) }
+                                    report.low?.takeIf { it > 0 }?.let { Chip("$it کم", MaterialTheme.colorScheme.onSurfaceVariant) }
+                                    report.scanId?.let { Chip("Scan: ${ltrIsolate(it)}", MaterialTheme.colorScheme.tertiary) }
+                                }
+                                report.freeFindingTitle?.let { t ->
+                                    val cv = report.freeFindingCvss?.let { " (CVSS $it)" }.orEmpty()
+                                    SubTitle("۱) ${ltrIsolate(t)}$cv")
+                                }
+                                report.secondaryFindingTitle?.let { t ->
+                                    val cv = report.secondaryFindingCvss?.let { " (CVSS $it)" }.orEmpty()
+                                    SubTitle("۲) ${ltrIsolate(t)}$cv")
+                                }
+                                report.threatExposure?.let { SubTitle("شاخص خطر کسب‌وکار: $it") }
+                            }
+                        }
+                    }
+
+                    // Expandable Deep Business Intelligence Card + Refresh action
+                    if (companySummary.isNotBlank() || refreshingContext) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                "تحلیل You.com: " + companySummary.take(260),
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(10.dp)
-                            )
+                            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "تحلیل کسب‌وکار (وب‌سایت زنده + You.com)",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    TextButton(
+                                        onClick = onRefreshContext,
+                                        enabled = !refreshingContext
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(if (refreshingContext) "در حال بروزرسانی..." else "تحلیل مجدد", fontSize = 11.sp)
+                                    }
+                                }
+                                if (companySummary.isNotBlank()) {
+                                    Text(
+                                        if (summaryExpanded) companySummary else companySummary.take(280),
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    if (companySummary.length > 280) {
+                                        Text(
+                                            if (summaryExpanded) "بستن متن کامل" else "مشاهده تحلیل کامل...",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.clickable { summaryExpanded = !summaryExpanded }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        TextButton(onClick = onRefreshContext, enabled = !refreshingContext) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("دریافت تحلیل عمیق کسب‌وکار (${ltrIsolate(item.domain)})")
                         }
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         listOf("BUSINESS" to "فروش", "TECHNICAL" to "فنی", "DIRECT" to "مستقیم").forEach { (c, l) ->
                             FilterChip(
                                 selected = item.style == c,
                                 onClick = { onStyle(c) },
-                                label = { Text(l) }
+                                label = { Text(l, maxLines = 1, softWrap = false) }
                             )
                         }
                     }
@@ -1592,7 +1707,7 @@ private fun HtmlPreviewDialog(
                     }
                 }
                 if (item.match.attachmentNames.isNotEmpty()) {
-                    Chip("پیوست‌ها: ${item.match.attachmentNames.joinToString(" + ")}", GreenOk)
+                    Chip("پیوست‌ها: ${item.match.attachmentNames.joinToString(" + ") { ltrIsolate(it) }}", GreenOk)
                 }
             }
         },

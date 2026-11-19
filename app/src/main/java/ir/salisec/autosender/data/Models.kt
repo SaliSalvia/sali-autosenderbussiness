@@ -1,6 +1,6 @@
 package ir.salisec.autosender.data
 
-/** Parsed security report data (from JSON sidecar and/or the parsed PDF subset). */
+/** Parsed security report data (from JSON sidecar and/or the latest 2 parsed PDFs). */
 data class ReportData(
     val domain: String,
     val scanId: String? = null,
@@ -14,7 +14,17 @@ data class ReportData(
     val freeFindingCvss: String? = null,
     val freeFindingImpact: String? = null,
     val freeFindingSolution: String? = null,
-    val subdomains: Int? = null
+    val subdomains: Int? = null,
+    val posture: String? = null,
+    val secondaryFindingTitle: String? = null,
+    val secondaryFindingCvss: String? = null,
+    val secondaryFindingImpact: String? = null,
+    val secondaryFindingSolution: String? = null,
+    val threatExposure: String? = null,
+    val securityVectors: String? = null,
+    val owaspSummary: String? = null,
+    val lockedSummary: String? = null,
+    val wafStatus: String? = null
 )
 
 /** A contact (recipient) for a domain. Only ever the user's own lead list. */
@@ -68,7 +78,7 @@ fun MessageEntity.pageCounts(): List<Int?> =
     (attachmentPages ?: "").split("||").map { it.trim().toIntOrNull() }
 
 /** Match of an email/domain to its report folder in sitest.
- *  `bundle.pdfs` = up to six prioritized PDFs parsed for AI context.
+ *  `bundle.pdfs` = strictly the 2 newest prioritized PDFs parsed for AI context.
  *  `bundle.trialAttachments` = the verified Persian/English two-page trial pair, or empty. */
 data class DomainMatch(
     val domain: String,

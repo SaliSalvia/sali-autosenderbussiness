@@ -50,8 +50,10 @@ class InboxClient {
                 put("mail.store.protocol", "imap")
                 put("mail.imap.host", host)
                 put("mail.imap.port", port.toString())
+                put("mail.imap.auth.plain.disable", "false")
                 put("mail.imap.starttls.enable", "true")
                 put("mail.imap.starttls.required", "true")
+                put("mail.imap.ssl.protocols", "TLSv1.2 TLSv1.3")
                 put("mail.imap.ssl.checkserveridentity", "true")
                 put("mail.imap.connectiontimeout", "20000")
                 put("mail.imap.timeout", "30000")
@@ -59,6 +61,8 @@ class InboxClient {
                 put("mail.store.protocol", "imaps")
                 put("mail.imaps.host", host)
                 put("mail.imaps.port", port.toString())
+                put("mail.imaps.auth.plain.disable", "false")
+                put("mail.imaps.ssl.protocols", "TLSv1.2 TLSv1.3")
                 put("mail.imaps.connectiontimeout", "20000")
                 put("mail.imaps.timeout", "30000")
                 put("mail.imaps.ssl.checkserveridentity", "true")
@@ -68,7 +72,7 @@ class InboxClient {
 
     suspend fun list(s: Settings, limit: Int = 50): List<InboxMessage> = withContext(Dispatchers.IO) {
         val store = session(s).getStore(protocol(s))
-        store.connect(s.imapHost.trim(), safePort(s), s.imapUser.trim(), s.imapPass)
+        store.connect(s.imapHost.trim(), safePort(s), s.imapUser.trim(), s.imapPass.trimEnd('\r', '\n'))
         try {
             val folder = store.getFolder("INBOX")
             folder.open(Folder.READ_ONLY)
@@ -128,7 +132,7 @@ class InboxClient {
 
     suspend fun readFull(s: Settings, position: Int, uid: Long = -1L): InboxFullMessage = withContext(Dispatchers.IO) {
         val store = session(s).getStore(protocol(s))
-        store.connect(s.imapHost.trim(), safePort(s), s.imapUser.trim(), s.imapPass)
+        store.connect(s.imapHost.trim(), safePort(s), s.imapUser.trim(), s.imapPass.trimEnd('\r', '\n'))
         try {
             val folder = store.getFolder("INBOX")
             folder.open(Folder.READ_ONLY)

@@ -23,7 +23,19 @@ android {
 
     // Debug builds use the Android Gradle Plugin's standard per-user debug keystore.
     // No developer-local debug.keystore is required in the repository or CI.
+    signingConfigs {
+        create("debugConfig") {
+            storeFile = file("${rootDir}/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debugConfig")
+        }
         release {
             // R8 is on so the release artifact is a real, shrunk build. Conservative
             // keep rules protect JavaMail / Room / PDFBox reflection (proguard-rules.pro).

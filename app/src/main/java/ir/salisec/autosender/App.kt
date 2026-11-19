@@ -37,6 +37,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.json.JSONArray
+import java.util.concurrent.TimeUnit
 
 /** Draft/generated email state held in memory and mirrored to Room `studio_drafts`. */
 data class CampaignDraftItem(
@@ -157,7 +158,12 @@ class App : Application() {
     lateinit var engine: SendEngine
     lateinit var campaignRepository: CampaignRepository
     val session = CampaignSession()
-    val ok: OkHttpClient = OkHttpClient()
+    val ok: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(25, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(120, TimeUnit.SECONDS)
+        .build()
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {

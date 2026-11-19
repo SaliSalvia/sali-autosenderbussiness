@@ -23,8 +23,10 @@ import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -125,6 +127,43 @@ fun SettingsScreen(
 
     var folderCountText by remember { mutableStateOf("") }
 
+    var k9Notice by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+
+    val k9Picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val xml = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                    } catch (_: Exception) { "" }
+                }
+                val parsed = EmailAutoconfig.parseK9Settings(xml)
+                if (parsed == null) {
+                    k9Notice = false to "فایل .k9s معتبر پیدا نشد یا سرورهای IMAP/SMTP در آن ثبت نشده است."
+                } else {
+                    val nextEmail = parsed.email.ifBlank { s.fromEmail }
+                    val updated = s.copy(
+                        fromEmail = nextEmail,
+                        replyTo = s.replyTo.ifBlank { nextEmail },
+                        sendMode = if (s.brevoKey.isNotBlank()) s.sendMode else "SMTP",
+                        imapHost = parsed.imapHost.ifBlank { s.imapHost },
+                        imapPort = parsed.imapPort,
+                        imapSecurity = parsed.imapSecurity,
+                        imapUser = parsed.imapUsername.ifBlank { nextEmail },
+                        smtpHost = parsed.smtpHost.ifBlank { s.smtpHost },
+                        smtpPort = parsed.smtpPort,
+                        smtpSecurity = parsed.smtpSecurity,
+                        smtpUser = parsed.smtpUsername.ifBlank { nextEmail }
+                    )
+                    s = updated
+                    syncNumberStrings(updated)
+                    saved = false
+                    k9Notice = true to "تنظیمات فایل .k9s ایمپورت شد (${ltrIsolate(updated.smtpHost)}). رمز صندوق ایمیل را وارد و ذخیره کنید."
+                }
+            }
+        }
+    }
+
     val treePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             try {
@@ -154,13 +193,51 @@ fun SettingsScreen(
     ScreenScaffold {
         SubTitle("تمام کلیدهای API، قالب‌های ایمیل و مشخصات ایمیل فقط یک‌بار وارد شده و به صورت رمزنگاری‌شده (AES) دائماً ذخیره می‌شوند.")
 
-        // 0. Quick Thunderbird Email Setup Wizard Launch
+        // 0. Quick Thunderbird Email Setup Wizard, .k9s Import & Runflare Preset
         OutlinedButton(
             onClick = onOpenEmailSetup,
             modifier = Modifier.fillMaxWidth().testTag("settings_open_thunderbird")
         ) {
             Text("راه‌اندازی جادویی ایمیل ورودی و خروجی (سبک Thunderbird)")
         }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                onClick = {
+                    val preset = EmailAutoconfig.runflarePreset(s.fromEmail)
+                    val emailUser = s.fromEmail.trim().ifBlank { s.smtpUser.ifBlank { s.imapUser } }
+                    val updated = s.copy(
+                        sendMode = "SMTP",
+                        smtpHost = preset.smtpHost,
+                        smtpPort = preset.smtpPort,
+                        smtpSecurity = preset.smtpSecurity,
+                        smtpUser = emailUser,
+                        imapHost = preset.imapHost,
+                        imapPort = preset.imapPort,
+                        imapSecurity = preset.imapSecurity,
+                        imapUser = emailUser,
+                        dkimSelector = s.dkimSelector.ifBlank { "runflare" }
+                    )
+                    s = updated
+                    syncNumberStrings(updated)
+                    saved = false
+                    k9Notice = true to "پریست Runflare اعمال شد (${ltrIsolate("smtp-ir-01.runflare.com")} • IMAP 993 / SMTP 465 SSL). رمز صندوق ایمیل را وارد کنید."
+                },
+                modifier = Modifier.weight(1f).testTag("settings_runflare_preset")
+            ) {
+                Text("پریست Runflare")
+            }
+            OutlinedButton(
+                onClick = { k9Picker.launch(arrayOf("*/*")) },
+                modifier = Modifier.weight(1f).testTag("settings_import_k9s")
+            ) {
+                Icon(Icons.Default.UploadFile, contentDescription = null)
+                Text(" ورود فایل .k9s")
+            }
+        }
+        k9Notice?.let { (ok, msg) -> Chip(msg, if (ok) GreenOk else RedErr) }
 
         // 1. hcnsec API + Auto Strongest Model Probe
         Section(
@@ -450,23 +527,44 @@ fun SettingsScreen(
                         smtpPortStr = raw.filter { it.isDigit() }.take(5); saved = false
                     }
                     Column(Modifier.weight(1.2f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        SubTitle("امنیت SMTP")
+                        SubTitle("امنیت SMTP (پورت خودکار)")
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             FilterChip(
                                 selected = s.smtpSecurity == "STARTTLS",
-                                onClick = { s = s.copy(smtpSecurity = "STARTTLS"); saved = false },
+                                onClick = {
+                                    val newPort = if (smtpPortStr == "465" || smtpPortStr.isBlank()) "587" else smtpPortStr
+                                    smtpPortStr = newPort
+                                    s = s.copy(smtpSecurity = "STARTTLS", smtpPort = newPort.toIntOrNull() ?: 587)
+                                    saved = false
+                                },
                                 label = { Text("STARTTLS") }
                             )
                             FilterChip(
                                 selected = s.smtpSecurity == "SSL",
-                                onClick = { s = s.copy(smtpSecurity = "SSL"); saved = false },
+                                onClick = {
+                                    val newPort = if (smtpPortStr == "587" || smtpPortStr.isBlank()) "465" else smtpPortStr
+                                    smtpPortStr = newPort
+                                    s = s.copy(smtpSecurity = "SSL", smtpPort = newPort.toIntOrNull() ?: 465)
+                                    saved = false
+                                },
                                 label = { Text("SSL") }
                             )
                         }
                     }
                 }
-                LabeledField("نام کاربری SMTP", s.smtpUser) { s = s.copy(smtpUser = it); saved = false }
-                LabeledField("رمز SMTP", s.smtpPass, isSecret = true) { s = s.copy(smtpPass = it); saved = false }
+                LabeledField("نام کاربری SMTP (کامل با @)", s.smtpUser) { s = s.copy(smtpUser = it); saved = false }
+                LabeledField("رمز صندوق ایمیل / SMTP", s.smtpPass, isSecret = true) { s = s.copy(smtpPass = it); saved = false }
+                if (s.smtpPass.isNotBlank() && s.imapPass != s.smtpPass) {
+                    TextButton(onClick = {
+                        s = s.copy(
+                            imapPass = s.smtpPass,
+                            imapUser = s.imapUser.ifBlank { s.smtpUser.ifBlank { s.fromEmail } }
+                        )
+                        saved = false
+                    }) {
+                        Text("کپی همین نام کاربری و رمز برای IMAP نیز")
+                    }
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 LabeledField(
@@ -571,17 +669,27 @@ fun SettingsScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = s.imapSecurity == "SSL",
-                    onClick = { s = s.copy(imapSecurity = "SSL"); saved = false },
+                    onClick = {
+                        val newPort = if (imapPortStr == "143" || imapPortStr.isBlank()) "993" else imapPortStr
+                        imapPortStr = newPort
+                        s = s.copy(imapSecurity = "SSL", imapPort = newPort.toIntOrNull() ?: 993)
+                        saved = false
+                    },
                     label = { Text("SSL (993)") }
                 )
                 FilterChip(
                     selected = s.imapSecurity == "STARTTLS",
-                    onClick = { s = s.copy(imapSecurity = "STARTTLS"); saved = false },
+                    onClick = {
+                        val newPort = if (imapPortStr == "993" || imapPortStr.isBlank()) "143" else imapPortStr
+                        imapPortStr = newPort
+                        s = s.copy(imapSecurity = "STARTTLS", imapPort = newPort.toIntOrNull() ?: 143)
+                        saved = false
+                    },
                     label = { Text("STARTTLS (143)") }
                 )
             }
-            LabeledField("نام کاربری IMAP", s.imapUser) { s = s.copy(imapUser = it); saved = false }
-            LabeledField("رمز برنامه (App Password)", s.imapPass, isSecret = true) {
+            LabeledField("نام کاربری IMAP (کامل با @)", s.imapUser) { s = s.copy(imapUser = it); saved = false }
+            LabeledField("رمز صندوق ایمیل (IMAP Password)", s.imapPass, isSecret = true) {
                 s = s.copy(imapPass = it); saved = false
             }
 

@@ -130,38 +130,45 @@ class BrevoSender(private val client: OkHttpClient) : MailSender {
 /** Standard SMTP / SMTPS sender. Deterministic Message-ID is for threading/traceability, not deduplication. */
 class SmtpSender : MailSender {
     override suspend fun send(s: Settings, msg: OutgoingMessage): SendReceipt = withContext(Dispatchers.IO) {
+        val host = s.smtpHost.trim()
+        val user = s.smtpUser.trim()
+        val pass = s.smtpPass.trimEnd('\r', '\n')
         val useSsl = s.smtpSecurity == "SSL" || s.smtpPort == 465
         val props = Properties().apply {
             if (useSsl) {
-                put("mail.smtps.host", s.smtpHost)
+                put("mail.smtps.host", host)
                 put("mail.smtps.port", s.smtpPort.toString())
                 put("mail.smtps.auth", "true")
+                put("mail.smtps.auth.mechanisms", "PLAIN LOGIN")
                 put("mail.smtps.ssl.enable", "true")
+                put("mail.smtps.ssl.protocols", "TLSv1.2 TLSv1.3")
                 put("mail.smtps.ssl.checkserveridentity", "true")
                 put("mail.smtps.connectiontimeout", "30000")
                 put("mail.smtps.timeout", "60000")
             } else {
-                put("mail.smtp.host", s.smtpHost)
+                put("mail.smtp.host", host)
                 put("mail.smtp.port", s.smtpPort.toString())
                 put("mail.smtp.auth", "true")
+                put("mail.smtp.auth.mechanisms", "PLAIN LOGIN")
                 put("mail.smtp.starttls.enable", "true")
                 put("mail.smtp.starttls.required", "true")
+                put("mail.smtp.ssl.protocols", "TLSv1.2 TLSv1.3")
                 put("mail.smtp.ssl.checkserveridentity", "true")
                 put("mail.smtp.connectiontimeout", "30000")
                 put("mail.smtp.timeout", "60000")
             }
         }
         val session = Session.getInstance(props, object : Authenticator() {
-            override fun getPasswordAuthentication() = PasswordAuthentication(s.smtpUser, s.smtpPass)
+            override fun getPasswordAuthentication() = PasswordAuthentication(user, pass)
         })
         val domainPart = s.fromEmail.substringAfter('@', "salisec.ir").ifBlank { "salisec.ir" }
         val rfcMsgId = if (msg.idempotencyKey.isNotBlank()) "<${msg.idempotencyKey}@$domainPart>" else null
 
         val mm = MimeMessage(session)
-        mm.setFrom(InternetAddress(s.fromEmail, s.fromName, "UTF-8"))
-        mm.setRecipient(Message.RecipientType.TO, InternetAddress(msg.to))
+        mm.setFrom(InternetAddress(s.fromEmail.trim(), s.fromName.trim(), "UTF-8"))
+        mm.setRecipient(Message.RecipientType.TO, InternetAddress(msg.to.trim()))
         mm.setSubject(msg.subject, "UTF-8")
-        val replyAddr = s.replyTo.ifBlank { s.fromEmail }
+        val replyAddr = s.replyTo.ifBlank { s.fromEmail }.trim()
         mm.replyTo = arrayOf(InternetAddress(replyAddr))
         mm.sentDate = Date()
         if (rfcMsgId != null) {
@@ -206,7 +213,7 @@ class SmtpSender : MailSender {
         val transport = session.getTransport(proto)
         var sendAttempted = false
         try {
-            transport.connect(s.smtpHost.trim(), s.smtpPort, s.smtpUser.trim(), s.smtpPass)
+            transport.connect(host, s.smtpPort, user, pass)
             // SMTP may accept DATA before the client receives the final response.
             // Message-ID helps threading but is not a server-side idempotency guarantee.
             sendAttempted = true

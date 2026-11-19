@@ -7,6 +7,7 @@
     <string name="nav_campaign">کمپین سریع</string>
     <string name="nav_send">صف ارسال</string>
     <string name="nav_pipeline">فروش و صندوق</string>
+    <string name="nav_pipeline_tab">فروش</string>
     <string name="nav_settings">تنظیمات</string>
 
     <!-- Home / dashboard -->

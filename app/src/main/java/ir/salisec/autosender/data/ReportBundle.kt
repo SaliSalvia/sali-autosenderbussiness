@@ -16,7 +16,7 @@ data class PdfDoc(
     val sizeBytes: Long = 0L
 )
 
-/** The evidence pack for one domain: up to six prioritized PDF documents + structured facts.
+/** The evidence pack for one domain: strictly the 2 newest prioritized PDF documents + structured facts.
  *  The mail sender attaches only a verified two-page Persian/English trial pair. */
 data class ReportBundle(
     val domain: String,
@@ -34,37 +34,47 @@ data class ReportBundle(
         sidecarText?.let { append(it) }
     }
 
-    /** Deterministic, capped context for hcnsec. Includes extracted facts and PDF text. */
-    fun aiContext(limit: Int = 24000): String {
+    /** Deterministic, capped context for hcnsec. Includes extracted facts and strictly the 2 latest PDFs. */
+    fun aiContext(limit: Int = 26000): String {
         val sb = StringBuilder()
         sb.append("دامنه هدف: ").append(domain).append('\n')
-        sb.append("تعداد اسناد PDF خوانده‌شده برای تحلیل: ").append(pdfs.size).append('\n')
+        sb.append("تعداد اسناد PDF تحلیل‌شده (فقط ۲ نسخه جدیدترین): ").append(pdfs.size).append('\n')
         data?.let { d ->
-            d.scanId?.let { sb.append("شناسه اسکن: ").append(it).append('\n') }
+            d.scanId?.let { sb.append("شناسه اسکن (Scan ID): ").append(it).append('\n') }
             d.score?.let { sb.append("امتیاز امنیتی: ").append(it).append(" از 100\n") }
+            d.posture?.let { sb.append("وضعیت کلی امنیت: ").append(it).append('\n') }
             d.findings?.let { sb.append("تعداد کل یافته‌ها: ").append(it).append('\n') }
-            sb.append("توزیع شدت: بحرانی ").append(d.critical ?: 0)
+            sb.append("توزیع شدت واقعی: بحرانی ").append(d.critical ?: 0)
                 .append("، زیاد ").append(d.high ?: 0)
                 .append("، متوسط ").append(d.medium ?: 0)
                 .append("، کم ").append(d.low ?: 0).append('\n')
-            d.freeFindingTitle?.let { sb.append("یافته رایگان: ").append(it).append('\n') }
-            d.freeFindingCvss?.let { sb.append("CVSS یافته رایگان: ").append(it).append('\n') }
-            d.freeFindingImpact?.let { sb.append("تاثیر یافته رایگان: ").append(it).append('\n') }
-            d.freeFindingSolution?.let { sb.append("راه حل یافته رایگان: ").append(it).append('\n') }
+            d.freeFindingTitle?.let { sb.append("یافته اثبات‌شده ۱: ").append(it).append('\n') }
+            d.freeFindingCvss?.let { sb.append("CVSS یافته ۱: ").append(it).append('\n') }
+            d.freeFindingImpact?.let { sb.append("تاثیر تجاری/فنی یافته ۱: ").append(it).append('\n') }
+            d.freeFindingSolution?.let { sb.append("راهکار رفع یافته ۱: ").append(it).append('\n') }
+            d.secondaryFindingTitle?.let { sb.append("یافته اثبات‌شده ۲: ").append(it).append('\n') }
+            d.secondaryFindingCvss?.let { sb.append("CVSS یافته ۲: ").append(it).append('\n') }
+            d.secondaryFindingImpact?.let { sb.append("تاثیر تجاری/فنی یافته ۲: ").append(it).append('\n') }
+            d.secondaryFindingSolution?.let { sb.append("راهکار رفع یافته ۲: ").append(it).append('\n') }
+            d.threatExposure?.let { sb.append("شاخص مواجهه کسب‌وکار با تهدید: ").append(it).append('\n') }
+            d.securityVectors?.let { sb.append("امتیاز بردارهای امنیتی: ").append(it).append('\n') }
+            d.owaspSummary?.let { sb.append("دسته‌بندی OWASP Top 10: ").append(it).append('\n') }
+            d.lockedSummary?.let { sb.append("یافته‌های قفل در گزارش کامل: ").append(it).append('\n') }
+            d.wafStatus?.let { sb.append("وضعیت لایه WAF: ").append(it).append('\n') }
             d.subdomains?.let { sb.append("زیردامنه‌های فعال: ").append(it).append('\n') }
         }
         sidecarText?.let {
             sb.append("\n=== SIDECAR JSON (داده ساختاری معتبر) ===\n")
                 .append(it.take(4000)).append('\n')
         }
-        pdfs.forEachIndexed { i, d ->
+        pdfs.take(ReportReader.MAX_PDFS_FOR_AI).forEachIndexed { i, d ->
             val left = limit - sb.length
             if (left <= 240) return@forEachIndexed
             sb.append("\n=== سند ").append(i + 1).append(": ").append(d.name)
                 .append(" | صفحات: ").append(d.pages?.toString() ?: "نامشخص")
                 .append(" | نوع: ").append(if (AttachmentPolicy.isTrialName(d.name)) "trial" else "گزارش")
                 .append(" ===\n")
-                .append(if (d.readOk) d.text.take(minOf(left - 200, 6500)) else "(متن قابل استخراج نبود)")
+                .append(if (d.readOk) d.text.take(minOf(left - 200, 9500)) else "(متن قابل استخراج نبود)")
                 .append('\n')
         }
         sb.append("\n[پیوست‌های ایمیل] ")
@@ -84,6 +94,7 @@ data class ReportBundle(
             data?.let { d ->
                 append("scanId=").append(d.scanId.orEmpty()).append('\n')
                 append("score=").append(d.score).append('\n')
+                append("posture=").append(d.posture.orEmpty()).append('\n')
                 append("findings=").append(d.findings).append('\n')
                 append("critical=").append(d.critical).append('\n')
                 append("high=").append(d.high).append('\n')
@@ -94,6 +105,10 @@ data class ReportBundle(
                 append("freeFindingCvss=").append(d.freeFindingCvss.orEmpty()).append('\n')
                 append("freeFindingImpact=").append(d.freeFindingImpact.orEmpty()).append('\n')
                 append("freeFindingSolution=").append(d.freeFindingSolution.orEmpty()).append('\n')
+                append("secondaryFindingTitle=").append(d.secondaryFindingTitle.orEmpty()).append('\n')
+                append("secondaryFindingCvss=").append(d.secondaryFindingCvss.orEmpty()).append('\n')
+                append("threatExposure=").append(d.threatExposure.orEmpty()).append('\n')
+                append("lockedSummary=").append(d.lockedSummary.orEmpty()).append('\n')
             }
             pdfs.sortedWith(compareBy<PdfDoc> { it.name.lowercase() }.thenBy { it.uri }).forEach { pdf ->
                 append("pdf=").append(pdf.name).append('|')

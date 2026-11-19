@@ -9,13 +9,13 @@ import org.json.JSONObject
 import org.w3c.dom.Element
 import org.xml.sax.InputSource
 import java.io.StringReader
-import javax.xml.parsers.DocumentBuilderFactory
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 import javax.mail.Authenticator
 import javax.mail.Folder
 import javax.mail.PasswordAuthentication
 import javax.mail.Session
+import javax.xml.parsers.DocumentBuilderFactory
 
 data class AutoconfigResult(
     val providerName: String,
@@ -33,6 +33,19 @@ data class AutoconfigResult(
         if (usernameTemplate == "LOCAL_PART") email.substringBefore('@') else email.trim()
 }
 
+data class K9ImportedAccount(
+    val name: String,
+    val email: String,
+    val imapHost: String,
+    val imapPort: Int,
+    val imapSecurity: String,
+    val imapUsername: String,
+    val smtpHost: String,
+    val smtpPort: Int,
+    val smtpSecurity: String,
+    val smtpUsername: String
+)
+
 data class AccountVerifyResult(
     val incomingOk: Boolean,
     val incomingMessage: String,
@@ -43,14 +56,27 @@ data class AccountVerifyResult(
 }
 
 /**
- * Thunderbird-style Mail Account Auto-Discovery & Live Credential Sign-In:
- *  1. Checks well-known ISP presets (Gmail, Outlook/M365, Yahoo, Zoho, Yandex, iCloud, Proton)
- *  2. Queries https://autoconfig.<domain>/mail/config-v1.1.xml and /.well-known/autoconfig/...
- *  3. Queries Mozilla ISPDB (https://autoconfig.thunderbird.net/v1.1/<domain>)
- *  4. Queries DNS SRV (_imaps._tcp / _submission._tcp) via DoH
- *  5. Falls back to mail.<domain> standard ports (IMAP 993 SSL, SMTP 587 STARTTLS)
+ * Thunderbird-style Mail Account Auto-Discovery, .k9s Import & Live Credential Sign-In:
+ *  1. Built-in ISP presets (Gmail, Outlook/M365, Yahoo, Zoho, Yandex, iCloud, Runflare)
+ *  2. Mozilla Thunderbird ISPDB & domain autoconfig XML
+ *  3. Thunderbird / K-9 (.k9s) XML settings import
+ *  4. DNS SRV & MX discovery via DoH (including Runflare MX detection)
+ *  5. Live IMAP & SMTP/SMTPS verification with explicit PLAIN/LOGIN auth & actionable diagnostics
  */
 object EmailAutoconfig {
+
+    fun runflarePreset(email: String = ""): AutoconfigResult = AutoconfigResult(
+        providerName = if (email.contains('@')) "Runflare Mail (${email.substringAfter('@')})" else "Runflare Email Host",
+        source = "PRESET",
+        imapHost = "smtp-ir-01.runflare.com",
+        imapPort = 993,
+        imapSecurity = "SSL",
+        smtpHost = "smtp-ir-01.runflare.com",
+        smtpPort = 465,
+        smtpSecurity = "SSL",
+        usernameTemplate = "FULL_EMAIL",
+        note = "پیکربندی استاندارد Runflare (IMAP 993 SSL و SMTP 465 SSL با احراز هویت PLAIN). توجه: رمز صندوق ایمیل (Mailbox Password) را وارد کنید نه رمز پنل کاربری."
+    )
 
     suspend fun discover(client: OkHttpClient, email: String): AutoconfigResult = withContext(Dispatchers.IO) {
         val clean = email.trim().lowercase()
@@ -83,7 +109,7 @@ object EmailAutoconfig {
             fetchXmlConfig(quickClient, url, src)?.let { return@withContext it }
         }
 
-        // 3. DNS SRV discovery (_imaps._tcp and _submission._tcp) + MX inspection
+        // 3. DNS SRV discovery (_imaps._tcp and _submission._tcp)
         val srvImap = querySrv(quickClient, "_imaps._tcp.$domain")
         val srvSmtp = querySrv(quickClient, "_submission._tcp.$domain")
         val srvSmtps = querySrv(quickClient, "_submissions._tcp.$domain")
@@ -103,10 +129,16 @@ object EmailAutoconfig {
             )
         }
 
-        // 4. MX-guided detection (e.g., domain hosted on Google Workspace or Microsoft 365)
+        // 4. MX-guided detection (Google Workspace, Microsoft 365, Zoho, Yandex, Runflare)
         val mx = queryMx(quickClient, domain)
         if (mx != null) {
             when {
+                mx.contains("runflare") -> {
+                    return@withContext runflarePreset(clean).copy(
+                        source = "DNS_SRV",
+                        note = "رکورد MX دامنه $domain روی Runflare شناسایی شد (IMAP 993 SSL / SMTP 465 SSL)."
+                    )
+                }
                 mx.contains("google.com") || mx.contains("googlemail.com") -> {
                     return@withContext knownPreset("gmail.com")!!.copy(
                         providerName = "Google Workspace ($domain)",
@@ -146,7 +178,7 @@ object EmailAutoconfig {
             smtpPort = 587,
             smtpSecurity = "STARTTLS",
             usernameTemplate = "FULL_EMAIL",
-            note = "پیشنهاد پیش‌فرض سرور اختصاصی (mail.$domain) تنظیم شد؛ در صورت نیاز می‌توانید پورت/هاست را ویرایش کنید."
+            note = "پیشنهاد پیش‌فرض سرور اختصاصی (mail.$domain) تنظیم شد؛ اگر هاست شما Runflare است، دکمه پریست Runflare را بزنید."
         )
     }
 
@@ -161,29 +193,35 @@ object EmailAutoconfig {
         var inMsg = if (!testIncoming) "بررسی ورودی انتخاب نشد" else ""
         if (testIncoming) {
             try {
+                val imapHost = s.imapHost.trim()
+                val imapUser = s.imapUser.trim()
+                val imapPass = s.imapPass.trimEnd('\r', '\n')
                 val safeImapPort = if (s.imapPort in 1..65535) s.imapPort else if (s.imapSecurity == "STARTTLS") 143 else 993
+                val proto = if (s.imapSecurity == "STARTTLS") "imap" else "imaps"
                 val props = Properties().apply {
-                    val proto = if (s.imapSecurity == "STARTTLS") "imap" else "imaps"
                     put("mail.store.protocol", proto)
                     if (proto == "imap") {
-                        put("mail.imap.host", s.imapHost.trim())
+                        put("mail.imap.host", imapHost)
                         put("mail.imap.port", safeImapPort.toString())
+                        put("mail.imap.auth.plain.disable", "false")
                         put("mail.imap.starttls.enable", "true")
                         put("mail.imap.starttls.required", "true")
+                        put("mail.imap.ssl.protocols", "TLSv1.2 TLSv1.3")
                         put("mail.imap.ssl.checkserveridentity", "true")
                         put("mail.imap.connectiontimeout", "15000")
                         put("mail.imap.timeout", "15000")
                     } else {
-                        put("mail.imaps.host", s.imapHost.trim())
+                        put("mail.imaps.host", imapHost)
                         put("mail.imaps.port", safeImapPort.toString())
+                        put("mail.imaps.auth.plain.disable", "false")
+                        put("mail.imaps.ssl.protocols", "TLSv1.2 TLSv1.3")
                         put("mail.imaps.ssl.checkserveridentity", "true")
                         put("mail.imaps.connectiontimeout", "15000")
                         put("mail.imaps.timeout", "15000")
                     }
                 }
-                val proto = if (s.imapSecurity == "STARTTLS") "imap" else "imaps"
                 val store = Session.getInstance(props).getStore(proto)
-                store.connect(s.imapHost.trim(), safeImapPort, s.imapUser.trim(), s.imapPass)
+                store.connect(imapHost, safeImapPort, imapUser, imapPass)
                 try {
                     val inbox = store.getFolder("INBOX")
                     inbox.open(Folder.READ_ONLY)
@@ -196,7 +234,7 @@ object EmailAutoconfig {
                 }
             } catch (e: Exception) {
                 inOk = false
-                inMsg = "خطای ورود IMAP: " + (e.message?.take(140) ?: "اتصال برقرار نشد")
+                inMsg = formatMailError("IMAP", e)
             }
         }
 
@@ -229,48 +267,168 @@ object EmailAutoconfig {
                 }
             } else {
                 try {
+                    val smtpHost = s.smtpHost.trim()
+                    val smtpUser = s.smtpUser.trim()
+                    val smtpPass = s.smtpPass.trimEnd('\r', '\n')
                     val useSsl = s.smtpSecurity == "SSL" || s.smtpPort == 465
                     val safeSmtpPort = if (s.smtpPort in 1..65535) s.smtpPort else if (useSsl) 465 else 587
                     val proto = if (useSsl) "smtps" else "smtp"
                     val props = Properties().apply {
                         if (useSsl) {
-                            put("mail.smtps.host", s.smtpHost.trim())
+                            put("mail.smtps.host", smtpHost)
                             put("mail.smtps.port", safeSmtpPort.toString())
                             put("mail.smtps.auth", "true")
+                            put("mail.smtps.auth.mechanisms", "PLAIN LOGIN")
                             put("mail.smtps.ssl.enable", "true")
+                            put("mail.smtps.ssl.protocols", "TLSv1.2 TLSv1.3")
                             put("mail.smtps.ssl.checkserveridentity", "true")
                             put("mail.smtps.connectiontimeout", "15000")
                             put("mail.smtps.timeout", "15000")
                         } else {
-                            put("mail.smtp.host", s.smtpHost.trim())
+                            put("mail.smtp.host", smtpHost)
                             put("mail.smtp.port", safeSmtpPort.toString())
                             put("mail.smtp.auth", "true")
+                            put("mail.smtp.auth.mechanisms", "PLAIN LOGIN")
                             put("mail.smtp.starttls.enable", "true")
                             put("mail.smtp.starttls.required", "true")
+                            put("mail.smtp.ssl.protocols", "TLSv1.2 TLSv1.3")
                             put("mail.smtp.ssl.checkserveridentity", "true")
                             put("mail.smtp.connectiontimeout", "15000")
                             put("mail.smtp.timeout", "15000")
                         }
                     }
                     val session = Session.getInstance(props, object : Authenticator() {
-                        override fun getPasswordAuthentication() = PasswordAuthentication(s.smtpUser.trim(), s.smtpPass)
+                        override fun getPasswordAuthentication() = PasswordAuthentication(smtpUser, smtpPass)
                     })
                     val transport = session.getTransport(proto)
                     try {
-                        transport.connect(s.smtpHost.trim(), safeSmtpPort, s.smtpUser.trim(), s.smtpPass)
+                        transport.connect(smtpHost, safeSmtpPort, smtpUser, smtpPass)
                     } finally {
                         try { if (transport.isConnected) transport.close() } catch (_: Exception) {}
                     }
                     outOk = true
-                    outMsg = "احراز هویت خروجی SMTP موفق بود ✓ (${s.smtpHost.trim()}:$safeSmtpPort)"
+                    outMsg = "احراز هویت خروجی SMTP موفق بود ✓ ($smtpHost:$safeSmtpPort)"
                 } catch (e: Exception) {
                     outOk = false
-                    outMsg = "خطای ورود SMTP: " + (e.message?.take(140) ?: "احراز هویت ناموفق")
+                    outMsg = formatMailError("SMTP", e)
                 }
             }
         }
 
         AccountVerifyResult(inOk, inMsg, outOk, outMsg)
+    }
+
+    internal fun formatMailError(channel: String, e: Exception): String {
+        val raw = e.message.orEmpty()
+        val lower = raw.lowercase()
+        return when {
+            lower.contains("535") || lower.contains("authenticationfailed") || lower.contains("authentication failed") ->
+                "خطای احراز هویت $channel (نام کاربری کامل ایمیل یا رمز صندوق ایمیل نادرست است؛ آیکون چشم رمز را چک کنید، در Runflare رمز Mailbox را وارد کنید نه رمز پنل)"
+            lower.contains("sslhandshake") || lower.contains("certificate") || lower.contains("ssl") || lower.contains("tls") ->
+                "خطای SSL/TLS در $channel — مطابقت پورت و نوع امنیت را چک کنید (IMAP: 993 SSL یا 143 STARTTLS | SMTP: 465 SSL یا 587 STARTTLS)"
+            lower.contains("unknownhost") || lower.contains("resolve") ->
+                "خطای DNS $channel: آدرس هاست قابل دسترسی نیست (${raw.take(80)})"
+            lower.contains("timeout") || lower.contains("timed out") || lower.contains("refused") ->
+                "خطای اتصال/پورت $channel: سرور روی این پورت پاسخ نداد (${raw.take(80)})"
+            else -> "خطای ورود $channel: " + raw.take(140).ifBlank { "اتصال برقرار نشد" }
+        }
+    }
+
+    /**
+     * Parses Thunderbird / K-9 Mail `.k9s` settings export XML.
+     * Supports `<accounts><account><name>...</name><incoming-server type="IMAP">...<outgoing-server type="SMTP">...</accounts>`.
+     */
+    fun parseK9Settings(xml: String): K9ImportedAccount? {
+        if (!xml.contains("<account", ignoreCase = true) ||
+            (!xml.contains("incoming-server", ignoreCase = true) && !xml.contains("outgoing-server", ignoreCase = true))
+        ) {
+            return null
+        }
+        return try {
+            val dbf = DocumentBuilderFactory.newInstance().apply {
+                try {
+                    setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+                } catch (_: Exception) { }
+            }
+            val doc = dbf.newDocumentBuilder().parse(InputSource(StringReader(xml)))
+            val root = doc.documentElement ?: return null
+
+            fun directOrNestedTag(parent: Element, tag: String): String {
+                val nodes = parent.getElementsByTagName(tag)
+                return if (nodes.length > 0) nodes.item(0)?.textContent?.trim().orEmpty() else ""
+            }
+
+            fun mapSecurity(raw: String, fallbackSsl: Boolean): String = when {
+                raw.contains("STARTTLS", ignoreCase = true) -> "STARTTLS"
+                raw.contains("SSL", ignoreCase = true) -> "SSL"
+                fallbackSsl -> "SSL"
+                else -> "STARTTLS"
+            }
+
+            val accounts = root.getElementsByTagName("account")
+            if (accounts.length == 0) return null
+            val account = accounts.item(0) as? Element ?: return null
+            val accName = directOrNestedTag(account, "name")
+
+            var imapHost = ""
+            var imapPort = 993
+            var imapSec = "SSL"
+            var imapUser = ""
+
+            val incoming = account.getElementsByTagName("incoming-server")
+            for (i in 0 until incoming.length) {
+                val el = incoming.item(i) as? Element ?: continue
+                if (el.getAttribute("type").equals("imap", ignoreCase = true) || el.getAttribute("type").isBlank()) {
+                    imapHost = directOrNestedTag(el, "host")
+                    imapPort = directOrNestedTag(el, "port").toIntOrNull() ?: 993
+                    val rawSec = directOrNestedTag(el, "connection-security")
+                    imapSec = mapSecurity(rawSec, imapPort == 993)
+                    imapUser = directOrNestedTag(el, "username")
+                    break
+                }
+            }
+
+            var smtpHost = ""
+            var smtpPort = 465
+            var smtpSec = "SSL"
+            var smtpUser = ""
+
+            val outgoing = account.getElementsByTagName("outgoing-server")
+            for (i in 0 until outgoing.length) {
+                val el = outgoing.item(i) as? Element ?: continue
+                if (el.getAttribute("type").equals("smtp", ignoreCase = true) || el.getAttribute("type").isBlank()) {
+                    smtpHost = directOrNestedTag(el, "host")
+                    smtpPort = directOrNestedTag(el, "port").toIntOrNull() ?: 465
+                    val rawSec = directOrNestedTag(el, "connection-security")
+                    smtpSec = mapSecurity(rawSec, smtpPort == 465)
+                    smtpUser = directOrNestedTag(el, "username")
+                    break
+                }
+            }
+
+            if (imapHost.isBlank() && smtpHost.isBlank()) return null
+
+            val resolvedEmail = listOf(accName, smtpUser, imapUser)
+                .firstOrNull { it.contains('@') && !it.contains(' ') }
+                ?.trim()
+                ?.lowercase()
+                .orEmpty()
+
+            K9ImportedAccount(
+                name = accName.ifBlank { resolvedEmail },
+                email = resolvedEmail,
+                imapHost = imapHost,
+                imapPort = imapPort,
+                imapSecurity = imapSec,
+                imapUsername = imapUser.ifBlank { resolvedEmail },
+                smtpHost = smtpHost,
+                smtpPort = smtpPort,
+                smtpSecurity = smtpSec,
+                smtpUsername = smtpUser.ifBlank { resolvedEmail }
+            )
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun knownPreset(domain: String): AutoconfigResult? = when (domain) {

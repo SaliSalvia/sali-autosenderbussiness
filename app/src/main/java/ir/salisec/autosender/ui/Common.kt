@@ -21,10 +21,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -32,6 +36,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,8 +49,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+/** Wraps technical LTR tokens (domains, emails, PDF filenames, hostnames) so RTL BiDi never scrambles them. */
+fun ltrIsolate(text: String): String = if (text.isBlank()) text else "\u2066$text\u2069"
 
 @Composable
 fun ScreenScaffold(
@@ -174,6 +186,7 @@ fun LabeledField(
     modifier: Modifier = Modifier,
     onChange: (String) -> Unit
 ) {
+    var secretVisible by remember(isSecret) { mutableStateOf(false) }
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
             label,
@@ -191,7 +204,17 @@ fun LabeledField(
             maxLines = if (multiline) 10 else 1,
             singleLine = singleLine && !multiline,
             keyboardOptions = keyboardOptions,
-            visualTransformation = if (isSecret) PasswordVisualTransformation() else VisualTransformation.None,
+            visualTransformation = if (isSecret && !secretVisible) PasswordVisualTransformation() else VisualTransformation.None,
+            trailingIcon = if (isSecret) {
+                {
+                    IconButton(onClick = { secretVisible = !secretVisible }) {
+                        Icon(
+                            imageVector = if (secretVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = if (secretVisible) "مخفی کردن رمز" else "نمایش رمز"
+                        )
+                    }
+                }
+            } else null,
             shape = RoundedCornerShape(14.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = MaterialTheme.colorScheme.primary,
@@ -218,7 +241,7 @@ fun BigButton(
             .heightIn(min = 52.dp)
             .minimumInteractiveComponentSize(),
         shape = RoundedCornerShape(14.dp),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
     ) {
         if (loading) {
@@ -232,7 +255,13 @@ fun BigButton(
             Icon(icon, contentDescription = null, modifier = Modifier.size(19.dp))
             Spacer(Modifier.width(8.dp))
         }
-        Text(text, style = MaterialTheme.typography.labelLarge)
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 

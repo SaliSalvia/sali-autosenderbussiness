@@ -191,7 +191,14 @@ fun AppShell(app: App) {
                                 contentDescription = null
                             )
                         },
-                        label = { Text(stringResource(R.string.nav_home), maxLines = 1) },
+                        label = {
+                            Text(
+                                stringResource(R.string.nav_home),
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
                         modifier = Modifier.testTag("nav_home")
                     )
                     NavigationBarItem(
@@ -203,7 +210,14 @@ fun AppShell(app: App) {
                                 contentDescription = null
                             )
                         },
-                        label = { Text(stringResource(R.string.nav_campaign), maxLines = 1) },
+                        label = {
+                            Text(
+                                stringResource(R.string.nav_campaign),
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
                         modifier = Modifier.testTag("nav_campaign")
                     )
                     NavigationBarItem(
@@ -223,7 +237,14 @@ fun AppShell(app: App) {
                                 )
                             }
                         },
-                        label = { Text(stringResource(R.string.nav_send), maxLines = 1) },
+                        label = {
+                            Text(
+                                stringResource(R.string.nav_send),
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
                         modifier = Modifier.testTag("nav_send")
                     )
                     NavigationBarItem(
@@ -235,7 +256,14 @@ fun AppShell(app: App) {
                                 contentDescription = null
                             )
                         },
-                        label = { Text(stringResource(R.string.nav_pipeline), maxLines = 1) },
+                        label = {
+                            Text(
+                                stringResource(R.string.nav_pipeline_tab),
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
                         modifier = Modifier.testTag("nav_pipeline")
                     )
                 }
