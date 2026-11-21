@@ -21,10 +21,14 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Outbox
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -66,11 +70,15 @@ import java.util.Locale
 fun HomeScreen(app: App, go: (Screen) -> Unit) {
     val scope = rememberCoroutineScope()
     val sendState by app.engine.state.collectAsState()
+    val queueVersion by app.engine.queueVersion.collectAsState()
     val contacts by app.session.contacts.collectAsState()
     val matches by app.session.matches.collectAsState()
     val deliverability by app.session.deliverability.collectAsState()
     var pendingCount by remember { mutableIntStateOf(0) }
     var sentTotal by remember { mutableIntStateOf(0) }
+    var repliedOrNegotiating by remember { mutableIntStateOf(0) }
+    var dueFollowUps by remember { mutableIntStateOf(0) }
+    var paidCount by remember { mutableIntStateOf(0) }
     var totalTokens by remember { mutableIntStateOf(0) }
     var showSendConfirm by remember { mutableStateOf(false) }
     val settings = remember(sendState.running) { app.prefs.load() }
@@ -78,14 +86,30 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
     fun refreshStats() {
         scope.launch {
             val all = app.db.messageDao().all()
+            val nowMs = System.currentTimeMillis()
             pendingCount = all.count { it.status == "APPROVED" || it.status == "QUEUED" }
             sentTotal = all.count { it.status == "SENT" }
+            repliedOrNegotiating = all.count { it.pipelineState == "REPLIED" || it.pipelineState == "NEGOTIATING" }
+            dueFollowUps = all.count {
+                it.status == "SENT" &&
+                    it.pipelineState == "SENT" &&
+                    it.followUpAt != null &&
+                    it.followUpAt <= nowMs &&
+                    !app.prefs.isSuppressed(it.email, it.domain)
+            }
+            paidCount = all.count { it.pipelineState == "PAID" }
             totalTokens = all.sumOf { it.promptTokens + it.completionTokens }
         }
     }
 
-    LaunchedEffect(Unit) { refreshStats() }
-    LaunchedEffect(sendState.sent, sendState.failed, sendState.skipped, sendState.running, contacts.size) {
+    LaunchedEffect(
+        queueVersion,
+        sendState.sent,
+        sendState.failed,
+        sendState.skipped,
+        sendState.running,
+        contacts.size
+    ) {
         refreshStats()
     }
 
@@ -114,6 +138,9 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
                     )
+                }
+                if (paidCount > 0) {
+                    Chip("فروش موفق: $paidCount", GreenOk, onClick = { go(Screen.PipelineInbox) })
                 }
             }
 
@@ -161,15 +188,49 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                MetricTile("مخاطب فعال", contacts.size.toString(), Modifier.weight(1f))
-                MetricTile("آماده ارسال", pendingCount.toString(), Modifier.weight(1f))
-                MetricTile("ارسال‌شده", sentTotal.toString(), Modifier.weight(1f))
-                if (totalTokens > 0) {
-                    MetricTile("توکن کل", totalTokens.toString(), Modifier.weight(1f))
+            // Responsive 2x2 executive KPI metric grid
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MetricTile(
+                        label = "مخاطب فعال",
+                        value = contacts.size.toString(),
+                        icon = Icons.Default.People,
+                        accent = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricTile(
+                        label = "آماده ارسال",
+                        value = pendingCount.toString(),
+                        icon = Icons.Default.Schedule,
+                        accent = if (pendingCount > 0) OrangeWarn else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MetricTile(
+                        label = "ارسال‌شده",
+                        value = sentTotal.toString(),
+                        icon = Icons.Default.CheckCircle,
+                        accent = GreenOk,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricTile(
+                        label = if (dueFollowUps > 0 || repliedOrNegotiating > 0) "پاسخ و پیگیری" else "توکن کل AI",
+                        value = if (dueFollowUps > 0 || repliedOrNegotiating > 0) {
+                            "${repliedOrNegotiating + dueFollowUps}"
+                        } else {
+                            totalTokens.toString()
+                        },
+                        icon = Icons.Default.Forum,
+                        accent = if (dueFollowUps > 0 || repliedOrNegotiating > 0) OrangeWarn else MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
 
@@ -183,6 +244,36 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                 modifier = Modifier.testTag("home_start_campaign")
             ) {
                 go(Screen.Campaign)
+            }
+        }
+
+        if (repliedOrNegotiating > 0 || dueFollowUps > 0) {
+            Section(
+                header = "فرصت‌های فروش و پیگیری فوری",
+                icon = Icons.Default.NotificationsActive,
+                badge = "${repliedOrNegotiating + dueFollowUps} سرنخ",
+                badgeColor = OrangeWarn
+            ) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (repliedOrNegotiating > 0) {
+                        Chip("$repliedOrNegotiating پاسخ / در حال مذاکره", GreenOk)
+                    }
+                    if (dueFollowUps > 0) {
+                        Chip("$dueFollowUps سرنخ در سررسید پیگیری", OrangeWarn)
+                    }
+                }
+                OutlinedButton(
+                    onClick = { go(Screen.PipelineInbox) },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Forum, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("مدیریت سرنخ‌ها و تولید پاسخ AI")
+                }
             }
         }
 
@@ -240,6 +331,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                 subtitle = "ورود سطری ایمیل‌ها، تطبیق گزارش‌ها و انتخاب جفت Trial دوزبانه، سرچ You.com و طراحی با ۴ الگو",
                 icon = Icons.Default.AutoAwesome,
                 accent = MaterialTheme.colorScheme.primary,
+                statusText = if (matches.isNotEmpty()) "${matches.count { it.readyForApproval }} آماده" else null,
                 modifier = Modifier.testTag("home_card_campaign")
             ) { go(Screen.Campaign) }
 
@@ -248,6 +340,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                 subtitle = "اعتبارسنجی کامل DNS، چک مجدد رفع خطا و گزارش زنده ارسال",
                 icon = Icons.Default.Outbox,
                 accent = GreenOk,
+                statusText = if (pendingCount > 0) "$pendingCount در صف" else null,
                 modifier = Modifier.testTag("home_card_send")
             ) { go(Screen.Send) }
 
@@ -256,6 +349,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                 subtitle = "همگام‌سازی خودکار پاسخ‌ها و Bounce، مدیریت opt-out و پیگیری AI",
                 icon = Icons.Default.Forum,
                 accent = OrangeWarn,
+                statusText = if (repliedOrNegotiating > 0) "$repliedOrNegotiating پاسخ" else null,
                 modifier = Modifier.testTag("home_card_pipeline")
             ) { go(Screen.PipelineInbox) }
 
@@ -264,6 +358,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                 subtitle = "تشخیص خودکار سرورهای IMAP + SMTP و تست زنده اتصال ورودی و خروجی",
                 icon = Icons.Default.Email,
                 accent = MaterialTheme.colorScheme.secondary,
+                statusText = if (hasOutgoing && hasIncoming) "متصل ✓" else "تنظیم",
                 modifier = Modifier.testTag("home_card_email_setup")
             ) { go(Screen.EmailSetup) }
 
@@ -272,6 +367,7 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
                 subtitle = "تنظیم ۱ باره You.com، hcnsec (قوی‌ترین مدل)، ۴ قالب الگو و پوشه sitest",
                 icon = Icons.Default.Settings,
                 accent = MaterialTheme.colorScheme.onSurfaceVariant,
+                statusText = if (hasHcns && hasSitest) "تکمیل" else null,
                 modifier = Modifier.testTag("home_card_settings")
             ) { go(Screen.Settings) }
         }
@@ -317,20 +413,48 @@ fun HomeScreen(app: App, go: (Screen) -> Unit) {
 }
 
 @Composable
-private fun MetricTile(label: String, value: String, modifier: Modifier = Modifier) {
+private fun MetricTile(
+    label: String,
+    value: String,
+    icon: ImageVector,
+    accent: Color,
+    modifier: Modifier = Modifier
+) {
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.22f)),
         modifier = modifier
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(2.dp)
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(accent.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(
+                    value,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
@@ -341,13 +465,14 @@ private fun HomeCard(
     subtitle: String,
     icon: ImageVector,
     accent: Color,
+    statusText: String? = null,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
@@ -359,7 +484,7 @@ private fun HomeCard(
         ) {
             Box(
                 modifier = Modifier
-                    .size(42.dp)
+                    .size(44.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(accent.copy(alpha = 0.14f)),
                 contentAlignment = Alignment.Center
@@ -368,9 +493,25 @@ private fun HomeCard(
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (!statusText.isNullOrBlank()) {
+                        Spacer(Modifier.width(6.dp))
+                        Chip(statusText, accent)
+                    }
+                }
                 Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            Spacer(Modifier.width(4.dp))
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = stringResource(R.string.cd_open) + " $title",

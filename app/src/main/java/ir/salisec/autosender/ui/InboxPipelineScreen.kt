@@ -3,14 +3,17 @@ package ir.salisec.autosender.ui
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,15 +21,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.Analytics
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
@@ -37,13 +46,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -69,6 +82,17 @@ import java.util.Locale
 import java.util.UUID
 
 private val inboxEmailRegex = Regex("""[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}""")
+
+private val pipelineStageOptions = listOf(
+    "SENT" to "ارسال‌شده",
+    "REPLIED" to "پاسخ داده",
+    "NEGOTIATING" to "در مذاکره",
+    "PAID" to "پرداخت موفق",
+    "LOST" to "از دست رفته"
+)
+
+private fun pipelineStageLabel(state: String): String =
+    pipelineStageOptions.firstOrNull { it.first == state }?.second ?: state
 
 private data class FollowDraft(
     val original: MessageEntity,
@@ -180,6 +204,7 @@ fun PipelineInboxScreen(app: App, onOpenSettings: () -> Unit) {
 private fun PipelineTab(app: App) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val queueVersion by app.engine.queueVersion.collectAsState()
     var list by remember { mutableStateOf(listOf<MessageEntity>()) }
     var busy by remember { mutableStateOf(false) }
     var syncing by remember { mutableStateOf(false) }
@@ -188,11 +213,12 @@ private fun PipelineTab(app: App) {
     var draft by remember { mutableStateOf<FollowDraft?>(null) }
     var deleteTarget by remember { mutableStateOf<MessageEntity?>(null) }
     var pipelineFilter by remember { mutableStateOf("ALL") } // ALL | DUE | REPLIED | NEGOTIATING | PAID | LOST
+    var pipelineSearch by remember { mutableStateOf("") }
 
     fun reload() {
         scope.launch { list = app.db.messageDao().all() }
     }
-    LaunchedEffect(Unit) { reload() }
+    LaunchedEffect(queueVersion) { reload() }
 
     fun check(d: FollowDraft): QualityReport = app.ai.check(
         result = d.result,
@@ -205,12 +231,6 @@ private fun PipelineTab(app: App) {
         domain = d.original.domain,
         email = d.original.email
     )
-
-    fun cycleState(current: String): String {
-        val order = listOf("SENT", "REPLIED", "NEGOTIATING", "PAID", "LOST")
-        val i = order.indexOf(current)
-        return order[(i + 1).mod(order.size)]
-    }
 
     fun isDueForFollowUp(m: MessageEntity, nowMs: Long = System.currentTimeMillis()): Boolean =
         m.status == "SENT" &&
@@ -312,6 +332,15 @@ private fun PipelineTab(app: App) {
             Chip("از دست رفته $lost", RedErr)
         }
 
+        if (list.isNotEmpty()) {
+            LabeledField(
+                label = "جستجو در سرنخ‌ها (دامنه، ایمیل یا موضوع)",
+                value = pipelineSearch,
+                singleLine = true,
+                placeholder = "مثلاً inchand"
+            ) { pipelineSearch = it }
+        }
+
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -352,8 +381,6 @@ private fun PipelineTab(app: App) {
                 Icon(Icons.Default.Refresh, contentDescription = "بروزرسانی لیست", modifier = Modifier.size(18.dp))
             }
         }
-
-        SubTitle("با کلیک روی «تغییر مرحله» وضعیت سرنخ را به‌روز کنید: SENT → REPLIED → NEGOTIATING → PAID → LOST")
     }
 
     // A/B Experiment Analytics (Style + Subject Variant + Model + Token usage)
@@ -426,107 +453,64 @@ private fun PipelineTab(app: App) {
     okMsg?.let { Chip(it, GreenOk) }
     if (busy) LoadingBox("در حال تولید ایمیل پیگیری با AI...")
 
-    val filteredList = remember(list, pipelineFilter) {
+    val filteredList = remember(list, pipelineFilter, pipelineSearch) {
         val now = System.currentTimeMillis()
-        when (pipelineFilter) {
-            "DUE" -> list.filter { isDueForFollowUp(it, now) }
-            "REPLIED", "NEGOTIATING", "PAID", "LOST" -> list.filter { it.pipelineState == pipelineFilter }
-            else -> list
+        list.filter { m ->
+            val qOk = pipelineSearch.isBlank() ||
+                m.domain.contains(pipelineSearch, true) ||
+                m.email.contains(pipelineSearch, true) ||
+                m.subject.contains(pipelineSearch, true)
+            val fOk = when (pipelineFilter) {
+                "DUE" -> isDueForFollowUp(m, now)
+                "REPLIED", "NEGOTIATING", "PAID", "LOST" -> m.pipelineState == pipelineFilter
+                else -> true
+            }
+            qOk && fOk
         }
     }
 
     if (filteredList.isEmpty()) {
-        Section(header = "موردی یافت نشد", icon = Icons.AutoMirrored.Filled.TrendingUp) {
-            SubTitle("در این فیلد فعلی موردی نیست یا پس از تأیید و ارسال ایمیل‌ها در کمپین سریع اینجا نمایش داده می‌شوند.")
-        }
+        EmptyStateCard(
+            icon = Icons.AutoMirrored.Filled.TrendingUp,
+            title = if (list.isEmpty()) "هنوز سرنخی در خط لوله نیست" else "موردی با این فیلتر پیدا نشد",
+            subtitle = if (list.isEmpty()) {
+                "پس از تأیید و ارسال ایمیل‌ها در بخش «کمپین سریع»، مراحل پاسخ و فروش هر مخاطب اینجا رصد می‌شود."
+            } else {
+                "فیلتر یا عبارت جستجو را تغییر دهید تا همه سرنخ‌ها نمایش داده شوند."
+            },
+            actionLabel = if (list.isNotEmpty() && (pipelineFilter != "ALL" || pipelineSearch.isNotBlank())) {
+                "نمایش همه سرنخ‌ها"
+            } else null,
+            onAction = {
+                pipelineFilter = "ALL"
+                pipelineSearch = ""
+            }
+        )
     } else {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             filteredList.forEach { m ->
-                val due = isDueForFollowUp(m, nowMs)
-                Section(
-                    header = (if (m.isFollowUp) "پیگیری ${m.followUpStep.coerceAtLeast(1)}: " else "") + ltrIsolate(m.domain),
-                    badge = m.pipelineState,
-                    badgeColor = when (m.pipelineState) {
-                        "PAID" -> GreenOk
-                        "LOST" -> RedErr
-                        "REPLIED", "NEGOTIATING" -> OrangeWarn
-                        else -> MaterialTheme.colorScheme.primary
-                    }
-                ) {
-                    Text(ltrIsolate(m.email), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(m.subject, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        if (due) {
-                            Chip("موعد پیگیری رسیده ✓", OrangeWarn)
-                        } else if (m.status == "SENT" && m.pipelineState == "SENT" && m.followUpAt != null && m.followUpAt > nowMs) {
-                            val daysLeft = ((m.followUpAt - nowMs) / (24L * 60L * 60L * 1000L)).coerceAtLeast(1)
-                            Chip("یادآور پیگیری تا $daysLeft روز دیگر", MaterialTheme.colorScheme.primary)
-                        }
-                        if (m.subjectVariant.isNotBlank()) {
-                            Chip(ltrIsolate(m.subjectVariant), MaterialTheme.colorScheme.tertiary)
-                        }
-                        if (m.modelUsed.isNotBlank()) {
-                            Chip(ltrIsolate(m.modelUsed.take(22)), MaterialTheme.colorScheme.secondary)
-                        }
-                        val toks = m.promptTokens + m.completionTokens
-                        if (toks > 0) {
-                            Chip("$toks توکن", MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-
-                    if (!m.lastReplySnippet.isNullOrBlank()) {
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                "پاسخ مشتری: ${m.lastReplySnippet}",
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(8.dp)
-                            )
-                        }
-                    }
-
-                    if (m.attachmentNames.isNotBlank()) {
-                        val isolatedNames = m.attachmentNames.split("||").filter { it.isNotBlank() }.joinToString(" + ") { ltrIsolate(it) }
-                        SubTitle("پیوست: $isolatedNames")
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = {
-                            scope.launch {
-                                val nextState = cycleState(m.pipelineState)
-                                val clearFollow = nextState != "SENT"
-                                app.db.messageDao().update(
-                                    m.copy(
-                                        pipelineState = nextState,
-                                        followUpAt = if (clearFollow) null else m.followUpAt,
-                                        updatedAt = System.currentTimeMillis()
-                                    )
+                LeadPipelineCard(
+                    m = m,
+                    nowMs = nowMs,
+                    due = isDueForFollowUp(m, nowMs),
+                    busy = busy,
+                    suppressed = app.prefs.isSuppressed(m.email, m.domain),
+                    onSelectStage = { nextState ->
+                        scope.launch {
+                            val clearFollow = nextState != "SENT"
+                            app.db.messageDao().update(
+                                m.copy(
+                                    pipelineState = nextState,
+                                    followUpAt = if (clearFollow) null else m.followUpAt,
+                                    updatedAt = System.currentTimeMillis()
                                 )
-                                reload()
-                            }
-                        }) { Text("تغییر مرحله ←") }
-                        if (m.pipelineState in setOf("SENT", "REPLIED", "NEGOTIATING") &&
-                            m.status == "SENT" &&
-                            !app.prefs.isSuppressed(m.email, m.domain)
-                        ) {
-                            Button(
-                                enabled = !busy,
-                                onClick = { generateFollowUp(m) }
-                            ) {
-                                Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("پیگیری AI")
-                            }
+                            )
+                            reload()
                         }
-                        TextButton(onClick = { deleteTarget = m }) { Text("حذف", color = RedErr) }
-                    }
-                }
+                    },
+                    onGenerateFollowUp = { generateFollowUp(m) },
+                    onDelete = { deleteTarget = m }
+                )
             }
         }
     }
@@ -653,6 +637,190 @@ private fun PipelineTab(app: App) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
+private fun LeadPipelineCard(
+    m: MessageEntity,
+    nowMs: Long,
+    due: Boolean,
+    busy: Boolean,
+    suppressed: Boolean,
+    onSelectStage: (String) -> Unit,
+    onGenerateFollowUp: () -> Unit,
+    onDelete: () -> Unit
+) {
+    var stageMenuOpen by remember { mutableStateOf(false) }
+    val stageColor = when (m.pipelineState) {
+        "PAID" -> GreenOk
+        "LOST" -> RedErr
+        "REPLIED", "NEGOTIATING" -> OrangeWarn
+        else -> MaterialTheme.colorScheme.primary
+    }
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, stageColor.copy(alpha = 0.35f)),
+        tonalElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        (if (m.isFollowUp) "پیگیری ${m.followUpStep.coerceAtLeast(1)} • " else "") + ltrIsolate(m.domain),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        ltrIsolate(m.email),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Box {
+                    Chip(
+                        text = "${pipelineStageLabel(m.pipelineState)} ▾",
+                        color = stageColor,
+                        onClick = { stageMenuOpen = true }
+                    )
+                    DropdownMenu(
+                        expanded = stageMenuOpen,
+                        onDismissRequest = { stageMenuOpen = false }
+                    ) {
+                        pipelineStageOptions.forEach { (code, label) ->
+                            DropdownMenuItem(
+                                text = { Text("$label ($code)") },
+                                onClick = {
+                                    stageMenuOpen = false
+                                    if (code != m.pipelineState) onSelectStage(code)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Visual 4-step funnel progress bar
+            val stepIndex = when (m.pipelineState) {
+                "SENT" -> 1
+                "REPLIED" -> 2
+                "NEGOTIATING" -> 3
+                "PAID" -> 4
+                else -> 0
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                for (i in 1..4) {
+                    val active = m.pipelineState != "LOST" && i <= stepIndex
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(
+                                when {
+                                    m.pipelineState == "LOST" -> RedErr.copy(alpha = 0.35f)
+                                    active -> stageColor
+                                    else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                                }
+                            )
+                    )
+                }
+            }
+
+            Text(m.subject, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (due) {
+                    Chip("موعد پیگیری رسیده ✓", OrangeWarn)
+                } else if (m.status == "SENT" && m.pipelineState == "SENT" && m.followUpAt != null && m.followUpAt > nowMs) {
+                    val daysLeft = ((m.followUpAt - nowMs) / (24L * 60L * 60L * 1000L)).coerceAtLeast(1)
+                    Chip("یادآور پیگیری تا $daysLeft روز دیگر", MaterialTheme.colorScheme.primary)
+                }
+                if (m.subjectVariant.isNotBlank()) {
+                    Chip(ltrIsolate(m.subjectVariant), MaterialTheme.colorScheme.tertiary)
+                }
+                if (m.modelUsed.isNotBlank()) {
+                    Chip(ltrIsolate(m.modelUsed.take(22)), MaterialTheme.colorScheme.secondary)
+                }
+                val toks = m.promptTokens + m.completionTokens
+                if (toks > 0) {
+                    Chip("$toks توکن", MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            if (!m.lastReplySnippet.isNullOrBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "پاسخ مشتری: ${m.lastReplySnippet}",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
+            }
+
+            if (m.attachmentNames.isNotBlank()) {
+                val isolatedNames = m.attachmentNames.split("||").filter { it.isNotBlank() }.joinToString(" + ") { ltrIsolate(it) }
+                SubTitle("پیوست: $isolatedNames")
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box {
+                    OutlinedButton(onClick = { stageMenuOpen = true }) {
+                        Text("تغییر مرحله")
+                        Spacer(Modifier.width(2.dp))
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
+                    }
+                }
+                if (m.pipelineState in setOf("SENT", "REPLIED", "NEGOTIATING") &&
+                    m.status == "SENT" &&
+                    !suppressed
+                ) {
+                    Button(
+                        enabled = !busy,
+                        onClick = onGenerateFollowUp,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("پیگیری AI")
+                    }
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        Icons.Default.DeleteOutline,
+                        contentDescription = "حذف سرنخ",
+                        tint = RedErr
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
 private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -661,6 +829,8 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
     var notice by remember { mutableStateOf<String?>(null) }
     var messages by remember { mutableStateOf(listOf<InboxMessage>()) }
     var syncedLeadsMap by remember { mutableStateOf<Map<String, MessageEntity>>(emptyMap()) }
+    var inboxSearch by remember { mutableStateOf("") }
+    var inboxFilter by remember { mutableStateOf("ALL") } // ALL | LEADS | BOUNCE
 
     var open by remember { mutableStateOf<InboxMessage?>(null) }
     var openingMessage by remember { mutableStateOf(false) }
@@ -713,75 +883,157 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
     error?.let { Chip(it, RedErr) }
 
     if (!incomingConfigured) {
-        Section(header = "تنظیم IMAP", icon = Icons.Default.Inbox) {
-            SubTitle("برای مشاهده پاسخ مشتریان و تشخیص خودکار درخواست‌های حذف (opt-out)، مشخصات IMAP را در تنظیمات وارد کنید.")
-            OutlinedButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
-                Text("باز کردن تنظیمات IMAP")
+        EmptyStateCard(
+            icon = Icons.Default.Inbox,
+            title = "صندوق ورودی IMAP متصل نیست",
+            subtitle = "برای مشاهده پاسخ مشتریان، تشخیص Bounce و مدیریت خودکار خروج (opt-out)، مشخصات IMAP را تنظیم کنید.",
+            actionLabel = "باز کردن تنظیمات IMAP",
+            onAction = onOpenSettings
+        )
+    } else if (open == null) {
+        Section(
+            header = "صندوق دریافت پاسخ‌ها و همگام‌سازی",
+            icon = Icons.Default.Inbox,
+            badge = "${messages.size} پیام"
+        ) {
+            OutlinedButton(
+                onClick = { load() },
+                enabled = !loading && !openingMessage,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("دریافت / بروزرسانی صندوق و همگام‌سازی سرنخ‌ها")
+            }
+
+            if (messages.isNotEmpty()) {
+                LabeledField(
+                    label = "جستجو در فرستنده، موضوع یا متن",
+                    value = inboxSearch,
+                    singleLine = true,
+                    placeholder = "مثلاً گزارش یا دامنه"
+                ) { inboxSearch = it }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val leadsCount = messages.count { m ->
+                        val addr = inboxEmailRegex.find(m.from)?.value?.lowercase()
+                        addr != null && syncedLeadsMap.containsKey(addr)
+                    }
+                    val bounceCount = messages.count { it.isBounce }
+                    listOf(
+                        "ALL" to "همه (${messages.size})",
+                        "LEADS" to "سرنخ‌های ما ($leadsCount)",
+                        "BOUNCE" to "برگشتی ($bounceCount)"
+                    ).forEach { (code, lbl) ->
+                        FilterChip(
+                            selected = inboxFilter == code,
+                            onClick = { inboxFilter = code },
+                            label = { Text(lbl, fontSize = 11.sp) }
+                        )
+                    }
+                }
             }
         }
-    } else if (open == null) {
-        OutlinedButton(onClick = { load() }, enabled = !loading && !openingMessage, modifier = Modifier.fillMaxWidth()) {
-            Text("دریافت / بروزرسانی صندوق و همگام‌سازی سرنخ‌ها")
-        }
+
         if (loading) LoadingBox("در حال دریافت ایمیل‌ها...")
         if (openingMessage) LoadingBox("در حال بارگذاری متن کامل پیام...")
-        SubTitle(if (messages.isEmpty()) "پیامی وجود ندارد" else "${messages.size} پیام دریافت شد")
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            messages.forEach { m ->
+
+        val visibleMessages = remember(messages, syncedLeadsMap, inboxSearch, inboxFilter) {
+            messages.filter { m ->
                 val senderAddr = inboxEmailRegex.find(m.from)?.value?.lowercase()
-                val lead = senderAddr?.let { syncedLeadsMap[it] }
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(
-                        1.dp,
-                        if (m.isBounce) RedErr.copy(alpha = 0.55f)
-                        else if (lead != null) GreenOk.copy(alpha = 0.45f)
-                        else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                    ),
-                    modifier = Modifier.fillMaxWidth().clickable(enabled = !openingMessage) {
-                        scope.launch {
-                            openingMessage = true
-                            error = null
-                            notice = null
-                            try {
-                                val latest = app.prefs.load()
-                                val full = app.inbox.readFull(latest, m.position, m.uid)
-                                openText = full.body
-                                openMessageId = full.messageId ?: m.messageId
-                                openReferences = full.references ?: m.references
-                                replySubject = if (m.subject.startsWith("Re:", true)) m.subject else "Re: " + m.subject
-                                replyText = ""
-                                val dbLeads = senderAddr?.let { app.db.messageDao().byEmail(it) }.orEmpty()
-                                matchedLead = dbLeads.maxByOrNull { it.sentAt ?: it.createdAt }
-                                open = m
-                            } catch (e: Exception) {
-                                error = EmailAutoconfig.formatMailError("IMAP", e)
-                            } finally {
-                                openingMessage = false
+                val isLead = senderAddr != null && syncedLeadsMap.containsKey(senderAddr)
+                val qOk = inboxSearch.isBlank() ||
+                    m.from.contains(inboxSearch, true) ||
+                    m.subject.contains(inboxSearch, true) ||
+                    m.preview.contains(inboxSearch, true)
+                val fOk = when (inboxFilter) {
+                    "LEADS" -> isLead
+                    "BOUNCE" -> m.isBounce
+                    else -> true
+                }
+                qOk && fOk
+            }
+        }
+
+        if (!loading && visibleMessages.isEmpty()) {
+            EmptyStateCard(
+                icon = Icons.Default.MarkEmailUnread,
+                title = if (messages.isEmpty()) "صندوق ورودی خالی است" else "پیامی با این فیلتر پیدا نشد",
+                subtitle = if (messages.isEmpty()) {
+                    "در حال حاضر پیامی در INBOX شما وجود ندارد یا روی دکمه بروزرسانی کلیک کنید."
+                } else {
+                    "فیلتر یا عبارت جستجو را پاک کنید."
+                },
+                actionLabel = if (messages.isNotEmpty()) "نمایش همه پیام‌ها" else null,
+                onAction = {
+                    inboxFilter = "ALL"
+                    inboxSearch = ""
+                }
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                visibleMessages.forEach { m ->
+                    val senderAddr = inboxEmailRegex.find(m.from)?.value?.lowercase()
+                    val lead = senderAddr?.let { syncedLeadsMap[it] }
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(
+                            1.dp,
+                            if (m.isBounce) RedErr.copy(alpha = 0.55f)
+                            else if (lead != null) GreenOk.copy(alpha = 0.45f)
+                            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                        ),
+                        tonalElevation = 1.dp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable(enabled = !openingMessage) {
+                                scope.launch {
+                                    openingMessage = true
+                                    error = null
+                                    notice = null
+                                    try {
+                                        val latest = app.prefs.load()
+                                        val full = app.inbox.readFull(latest, m.position, m.uid)
+                                        openText = full.body
+                                        openMessageId = full.messageId ?: m.messageId
+                                        openReferences = full.references ?: m.references
+                                        replySubject = if (m.subject.startsWith("Re:", true)) m.subject else "Re: " + m.subject
+                                        replyText = ""
+                                        val dbLeads = senderAddr?.let { app.db.messageDao().byEmail(it) }.orEmpty()
+                                        matchedLead = dbLeads.maxByOrNull { it.sentAt ?: it.createdAt }
+                                        open = m
+                                    } catch (e: Exception) {
+                                        error = EmailAutoconfig.formatMailError("IMAP", e)
+                                    } finally {
+                                        openingMessage = false
+                                    }
+                                }
                             }
-                        }
-                    }
-                ) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(ltrIsolate(m.from), fontSize = 12.sp, modifier = Modifier.weight(1f))
-                            Text(
-                                if (m.date > 0L) fmt.format(Date(m.date)) else "—",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            if (m.isBounce) {
-                                Chip("گزارش برگشت ایمیل (Bounce: ${ltrIsolate(m.bouncedAddress ?: "?")})", RedErr)
+                    ) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(ltrIsolate(m.from), fontSize = 12.sp, modifier = Modifier.weight(1f))
+                                Text(
+                                    if (m.date > 0L) fmt.format(Date(m.date)) else "—",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
-                            if (lead != null) {
-                                Chip("سرنخ ${ltrIsolate(lead.domain)}: ${lead.pipelineState}", GreenOk)
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                if (m.isBounce) {
+                                    Chip("گزارش برگشت ایمیل (Bounce: ${ltrIsolate(m.bouncedAddress ?: "?")})", RedErr)
+                                }
+                                if (lead != null) {
+                                    Chip("سرنخ ${ltrIsolate(lead.domain)}: ${pipelineStageLabel(lead.pipelineState)}", GreenOk)
+                                }
                             }
+                            Text(m.subject.ifBlank { "(بدون موضوع)" }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            SubTitle(m.preview)
                         }
-                        Text(m.subject.ifBlank { "(بدون موضوع)" }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                        SubTitle(m.preview)
                     }
                 }
             }
@@ -791,7 +1043,7 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
         Section(header = m.subject.ifBlank { "(بدون موضوع)" }, icon = Icons.Default.Inbox) {
             SubTitle("از: " + ltrIsolate(m.from))
             matchedLead?.let { lead ->
-                Chip("متصل به سرنخ ${ltrIsolate(lead.domain)} (${lead.pipelineState})", GreenOk)
+                Chip("متصل به سرنخ ${ltrIsolate(lead.domain)} (${pipelineStageLabel(lead.pipelineState)})", GreenOk)
             }
             Text(openText, style = MaterialTheme.typography.bodyMedium)
         }
@@ -829,16 +1081,16 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                         aiGeneratingReply = true
                         error = null
                         try {
-                            val currentSettings = app.prefs.load()
+                            val latestSettings = app.prefs.load()
                             val senderAddr = inboxEmailRegex.find(m.from)?.value
                                 ?: throw IllegalStateException("آدرس فرستنده پیدا نشد")
                             val domain = matchedLead?.domain ?: senderAddr.substringAfter('@')
-                            val ctx = app.session.contexts.value[domain] ?: app.enricher.enrich(currentSettings, domain)
+                            val ctx = app.session.contexts.value[domain] ?: app.enricher.enrich(latestSettings, domain)
                             val bundle = matchedLead?.let { lead ->
                                 app.session.matches.value.firstOrNull { it.domain == lead.domain }?.bundle
                                     ?: withContext(Dispatchers.IO) {
-                                        if (currentSettings.sitestFolderUri.isNotBlank()) {
-                                            val root = DocumentFile.fromTreeUri(context, Uri.parse(currentSettings.sitestFolderUri))
+                                        if (latestSettings.sitestFolderUri.isNotBlank()) {
+                                            val root = DocumentFile.fromTreeUri(context, Uri.parse(latestSettings.sitestFolderUri))
                                             val folder = if (root != null) ReportReader.findFolder(root, lead.domain, lead.email) else null
                                             if (folder != null) {
                                                 ReportReader.readBundle(context, lead.domain, folder, app.db.pdfCacheDao())
@@ -847,7 +1099,7 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                                     }
                             }
                             val res = app.ai.generate(
-                                s = currentSettings,
+                                s = latestSettings,
                                 bundle = bundle,
                                 contactName = matchedLead?.name,
                                 context = ctx,
@@ -860,7 +1112,7 @@ private fun InboxTab(app: App, onOpenSettings: () -> Unit) {
                                 email = senderAddr,
                                 onResolvedModel = { probe ->
                                     app.prefs.save(
-                                        currentSettings.copy(
+                                        latestSettings.copy(
                                             hcnsModel = probe.selectedModel,
                                             hcnsReviewModel = probe.reviewModel,
                                             hcnsAvailableModels = probe.availableModels.joinToString(","),

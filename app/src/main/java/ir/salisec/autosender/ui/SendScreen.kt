@@ -2,18 +2,23 @@ package ir.salisec.autosender.ui
 
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -22,6 +27,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Outbox
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -30,6 +37,7 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +56,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -70,11 +80,13 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SendScreen(app: App, onOpenSettings: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by app.engine.state.collectAsState()
+    val queueVersion by app.engine.queueVersion.collectAsState()
     val deliverability by app.session.deliverability.collectAsState()
     var queue by remember { mutableStateOf(listOf<MessageEntity>()) }
     var showSendConfirm by remember { mutableStateOf(false) }
@@ -82,6 +94,7 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
     var checkingDns by remember { mutableStateOf(false) }
     var copiedRecordNotice by remember { mutableStateOf<String?>(null) }
     var exportNotice by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    var onlyErrorLogs by remember { mutableStateOf(false) }
 
     val settings = remember(state.running) { app.prefs.load() }
     val senderConfigured = settings.hasOutgoingConfigured()
@@ -127,7 +140,7 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
             runDeliverabilityChecks()
         }
     }
-    LaunchedEffect(state.sent, state.failed, state.skipped, state.running) { reload() }
+    LaunchedEffect(queueVersion, state.sent, state.failed, state.skipped, state.running) { reload() }
 
     // Live 1-second countdown ticker while waiting between sends
     LaunchedEffect(state.waitingUntil) {
@@ -165,6 +178,7 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
     val pending = queue.count {
         it.status == MessageState.APPROVED || it.status == MessageState.QUEUED
     }
+    val retryableFailed = queue.filter { it.status == MessageState.FAILED }
 
     ScreenScaffold {
         SubTitle(stringResource(R.string.send_subtitle))
@@ -264,12 +278,49 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
             }
         }
 
-        if (queue.isNotEmpty()) {
-            Section(header = stringResource(R.string.send_messages), icon = Icons.AutoMirrored.Filled.Send) {
+        if (queue.isEmpty()) {
+            EmptyStateCard(
+                icon = Icons.Default.Outbox,
+                title = "صف ارسال خالی است",
+                subtitle = "پس از تولید و تأیید پیام‌ها در بخش «کمپین سریع»، ایمیل‌های آماده ارسال در اینجا فهرست می‌شوند."
+            )
+        } else {
+            Section(
+                header = stringResource(R.string.send_messages),
+                icon = Icons.AutoMirrored.Filled.Send,
+                badge = "${queue.size} مورد"
+            ) {
+                if (retryableFailed.size > 1) {
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                val now = System.currentTimeMillis()
+                                retryableFailed.forEach { m ->
+                                    app.db.messageDao().update(
+                                        m.copy(
+                                            status = MessageState.QUEUED,
+                                            attempts = 0,
+                                            lastError = null,
+                                            updatedAt = now
+                                        )
+                                    )
+                                }
+                                app.engine.notifyQueueChanged()
+                                reload()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("تلاش مجدد همه ناموفق‌ها (${retryableFailed.size})")
+                    }
+                }
+
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     queue.take(100).forEach { m ->
                         Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
                             shape = RoundedCornerShape(14.dp),
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
                         ) {
@@ -282,7 +333,15 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(ltrIsolate(m.domain), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(ltrIsolate(m.domain), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                        if (m.isFollowUp) {
+                                            Chip("پیگیری ${m.followUpStep.coerceAtLeast(1)}", MaterialTheme.colorScheme.tertiary)
+                                        }
+                                    }
                                     StatusChip(m.status)
                                 }
                                 Text(
@@ -361,16 +420,50 @@ fun SendScreen(app: App, onOpenSettings: () -> Unit) {
         }
 
         if (state.logs.isNotEmpty()) {
-            Section(header = stringResource(R.string.send_activity), icon = Icons.Default.Outbox) {
+            val shownLogs = remember(state.logs, onlyErrorLogs) {
+                val base = if (onlyErrorLogs) state.logs.filter { !it.ok } else state.logs
+                base.take(40)
+            }
+            Section(
+                header = stringResource(R.string.send_activity),
+                icon = Icons.Default.Outbox,
+                badge = "${state.logs.size} رویداد"
+            ) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !onlyErrorLogs,
+                        onClick = { onlyErrorLogs = false },
+                        label = { Text("همه (${state.logs.size})") }
+                    )
+                    FilterChip(
+                        selected = onlyErrorLogs,
+                        onClick = { onlyErrorLogs = true },
+                        label = { Text("فقط خطاها (${state.logs.count { !it.ok }})") }
+                    )
+                }
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    state.logs.take(40).forEach { l ->
+                    if (shownLogs.isEmpty()) {
+                        SubTitle("خطایی در گزارش‌های اخیر ثبت نشده است.")
+                    }
+                    shownLogs.forEach { l ->
                         val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(l.ts))
-                        Text(
-                            "$time  ${if (l.ok) "✓" else "!"}  ${ltrIsolate(l.domain)}  ${ltrIsolate(l.email)}  —  ${l.message}",
-                            fontSize = 11.5.sp,
-                            fontFamily = MonoFontFamily,
-                            color = if (l.ok) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(if (l.ok) GreenOk else RedErr)
+                            )
+                            Text(
+                                "$time • ${ltrIsolate(l.domain)} (${ltrIsolate(l.email)}) — ${l.message}",
+                                fontSize = 11.5.sp,
+                                fontFamily = MonoFontFamily,
+                                color = if (l.ok) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
+                            )
+                        }
                     }
                 }
             }
@@ -424,6 +517,10 @@ private fun DeliverabilityChecklistCard(
     onCopyRecord: (String) -> Unit,
     onRecheck: () -> Unit
 ) {
+    var detailsExpanded by remember(report?.checkedAt, report?.isClean) {
+        mutableStateOf(report == null || !report.isClean)
+    }
+
     val badgeText = when {
         checking -> "در حال بررسی..."
         report == null -> "بررسی نشده"
@@ -452,74 +549,84 @@ private fun DeliverabilityChecklistCard(
                 SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(report.checkedAt))
             }
             if (report.isClean) {
-                Chip("دامنه ${ltrIsolate(report.senderDomain)} برای ارسال با کمترین ریسک اسپم کاملاً تأیید شد ✓ (بررسی: $timeStr)", GreenOk)
+                Chip("دامنه ${ltrIsolate(report.senderDomain)} برای ارسال با کمترین ریسک اسپم کاملاً تأیید شد ✓ ($timeStr)", GreenOk)
+                TextButton(
+                    onClick = { detailsExpanded = !detailsExpanded },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (detailsExpanded) "بستن جزئیات ${report.items.size} بررسی" else "مشاهده جزئیات ${report.items.size} بررسی سالم")
+                    Spacer(Modifier.width(6.dp))
+                    Icon(if (detailsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, contentDescription = null)
+                }
             } else if (report.hasCriticalFailure) {
-                Chip("هشدار: مشکلات بحرانی پایین را در پنل DNS / تنظیمات برطرف کرده و «چک مجدد» بزنید (بررسی: $timeStr)", RedErr)
+                Chip("هشدار: مشکلات بحرانی پایین را در پنل DNS / تنظیمات برطرف کرده و «چک مجدد» بزنید ($timeStr)", RedErr)
             } else {
                 SubTitle("آخرین بررسی سلامت DNS و اتصال: $timeStr")
             }
 
             copiedNotice?.let { Chip(it, GreenOk) }
 
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                report.items.forEach { item ->
-                    val itemColor = when (item.severity) {
-                        CheckSeverity.PASS -> GreenOk
-                        CheckSeverity.WARNING -> OrangeWarn
-                        CheckSeverity.FAIL -> RedErr
-                    }
-                    val itemIcon = when (item.severity) {
-                        CheckSeverity.PASS -> Icons.Default.CheckCircle
-                        CheckSeverity.WARNING -> Icons.Default.Warning
-                        CheckSeverity.FAIL -> Icons.Default.Error
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = itemColor.copy(alpha = 0.08f),
-                        border = BorderStroke(1.dp, itemColor.copy(alpha = 0.30f)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
+            AnimatedVisibility(visible = detailsExpanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    report.items.forEach { item ->
+                        val itemColor = when (item.severity) {
+                            CheckSeverity.PASS -> GreenOk
+                            CheckSeverity.WARNING -> OrangeWarn
+                            CheckSeverity.FAIL -> RedErr
+                        }
+                        val itemIcon = when (item.severity) {
+                            CheckSeverity.PASS -> Icons.Default.CheckCircle
+                            CheckSeverity.WARNING -> Icons.Default.Warning
+                            CheckSeverity.FAIL -> Icons.Default.Error
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = itemColor.copy(alpha = 0.08f),
+                            border = BorderStroke(1.dp, itemColor.copy(alpha = 0.30f)),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Icon(itemIcon, contentDescription = null, tint = itemColor, modifier = Modifier.size(16.dp))
-                                Text(
-                                    item.title,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = itemColor
-                                )
-                            }
-                            Text(item.detail, style = MaterialTheme.typography.bodySmall)
-                            if (item.remediation.isNotBlank()) {
-                                SubTitle("راهکار: ${item.remediation}", color = itemColor)
-                            }
-                            if (item.suggestedRecord.isNotBlank()) {
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = MaterialTheme.colorScheme.surface,
-                                    modifier = Modifier.fillMaxWidth()
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Row(
-                                        modifier = Modifier.padding(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    Icon(itemIcon, contentDescription = null, tint = itemColor, modifier = Modifier.size(16.dp))
+                                    Text(
+                                        item.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = itemColor
+                                    )
+                                }
+                                Text(item.detail, style = MaterialTheme.typography.bodySmall)
+                                if (item.remediation.isNotBlank()) {
+                                    SubTitle("راهکار: ${item.remediation}", color = itemColor)
+                                }
+                                if (item.suggestedRecord.isNotBlank()) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = MaterialTheme.colorScheme.surface,
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Text(
-                                            item.suggestedRecord,
-                                            fontSize = 11.sp,
-                                            fontFamily = MonoFontFamily,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        TextButton(onClick = { onCopyRecord(item.suggestedRecord) }) {
-                                            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
-                                            Spacer(Modifier.width(4.dp))
-                                            Text("کپی")
+                                        Row(
+                                            modifier = Modifier.padding(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                item.suggestedRecord,
+                                                fontSize = 11.sp,
+                                                fontFamily = MonoFontFamily,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            TextButton(onClick = { onCopyRecord(item.suggestedRecord) }) {
+                                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("کپی")
+                                            }
                                         }
                                     }
                                 }
@@ -530,7 +637,7 @@ private fun DeliverabilityChecklistCard(
             }
         }
 
-        // Prominent recheck button at the bottom of the validation section as requested
+        // Prominent recheck button at the bottom of the validation section
         BigButton(
             text = if (checking) "در حال بررسی مجدد..." else "چک مجدد و تأیید رفع مشکلات",
             loading = checking,
@@ -543,7 +650,7 @@ private fun DeliverabilityChecklistCard(
 }
 
 @Composable
-private fun StatChip(label: String, value: String, color: androidx.compose.ui.graphics.Color, modifier: Modifier = Modifier) {
+private fun StatChip(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = color.copy(alpha = 0.12f),

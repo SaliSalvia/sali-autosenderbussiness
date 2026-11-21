@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -40,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -128,6 +131,7 @@ fun SettingsScreen(
     var folderCountText by remember { mutableStateOf("") }
 
     var k9Notice by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    var activeCategory by remember { mutableStateOf("ALL") }
 
     val k9Picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -190,55 +194,110 @@ fun SettingsScreen(
         s.hcnsAvailableModels.split(',').map { it.trim() }.filter { it.isNotEmpty() }
     }
 
+    val showMail = activeCategory == "ALL" || activeCategory == "MAIL"
+    val showAi = activeCategory == "ALL" || activeCategory == "AI"
+    val showRules = activeCategory == "ALL" || activeCategory == "RULES"
+
     ScreenScaffold {
-        SubTitle("تمام کلیدهای API، قالب‌های ایمیل و مشخصات ایمیل فقط یک‌بار وارد شده و به صورت رمزنگاری‌شده (AES) دائماً ذخیره می‌شوند.")
-
-        // 0. Quick Thunderbird Email Setup Wizard, .k9s Import & Runflare Preset
-        OutlinedButton(
-            onClick = onOpenEmailSetup,
-            modifier = Modifier.fillMaxWidth().testTag("settings_open_thunderbird")
-        ) {
-            Text("راه‌اندازی جادویی ایمیل ورودی و خروجی (سبک Thunderbird)")
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedButton(
-                onClick = {
-                    val preset = EmailAutoconfig.runflarePreset(s.fromEmail)
-                    val emailUser = s.fromEmail.trim().ifBlank { s.smtpUser.ifBlank { s.imapUser } }
-                    val updated = s.copy(
-                        sendMode = "SMTP",
-                        smtpHost = preset.smtpHost,
-                        smtpPort = preset.smtpPort,
-                        smtpSecurity = preset.smtpSecurity,
-                        smtpUser = emailUser,
-                        imapHost = preset.imapHost,
-                        imapPort = preset.imapPort,
-                        imapSecurity = preset.imapSecurity,
-                        imapUser = emailUser,
-                        dkimSelector = s.dkimSelector.ifBlank { "runflare" }
+        HeroBanner {
+            Text(
+                "مرکز پیکربندی و اتصال‌ها",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            SubTitle("تمام کلیدهای API، قالب‌های ایمیل و مشخصات ایمیل فقط یک‌بار وارد شده و با رمزنگاری محلی (AES) دائماً ذخیره می‌شوند.")
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Chip(
+                    if (s.hcnsModelVerified) "hcnsec آماده" else if (s.hcnsKey.isNotBlank()) "hcnsec ثبت شد" else "hcnsec ناقص",
+                    if (s.hcnsModelVerified) GreenOk else if (s.hcnsKey.isNotBlank()) OrangeWarn else RedErr
+                )
+                Chip(
+                    if (s.youVerified) "You.com متصل" else if (s.youKey.isNotBlank()) "You.com ثبت شد" else "You.com ناقص",
+                    if (s.youVerified) GreenOk else if (s.youKey.isNotBlank()) OrangeWarn else RedErr
+                )
+                Chip(
+                    if (s.hasOutgoingConfigured()) "ارسال ایمیل آماده" else "ایمیل ناقص",
+                    if (s.hasOutgoingConfigured()) GreenOk else OrangeWarn
+                )
+                Chip(
+                    if (s.sitestFolderUri.isNotBlank()) "sitest متصل" else "sitest انتخاب‌نشده",
+                    if (s.sitestFolderUri.isNotBlank()) GreenOk else OrangeWarn
+                )
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(
+                    "ALL" to "همه بخش‌ها",
+                    "AI" to "هوش مصنوعی و الگوها",
+                    "MAIL" to "ایمیل و اتصال",
+                    "RULES" to "قوانین و حریم خصوصی"
+                ).forEach { (key, label) ->
+                    FilterChip(
+                        selected = activeCategory == key,
+                        onClick = { activeCategory = key },
+                        label = { Text(label) }
                     )
-                    s = updated
-                    syncNumberStrings(updated)
-                    saved = false
-                    k9Notice = true to "پریست Runflare اعمال شد (${ltrIsolate("smtp-ir-01.runflare.com")} • IMAP 993 / SMTP 465 SSL). رمز صندوق ایمیل را وارد کنید."
-                },
-                modifier = Modifier.weight(1f).testTag("settings_runflare_preset")
-            ) {
-                Text("پریست Runflare")
-            }
-            OutlinedButton(
-                onClick = { k9Picker.launch(arrayOf("*/*")) },
-                modifier = Modifier.weight(1f).testTag("settings_import_k9s")
-            ) {
-                Icon(Icons.Default.UploadFile, contentDescription = null)
-                Text(" ورود فایل .k9s")
+                }
             }
         }
-        k9Notice?.let { (ok, msg) -> Chip(msg, if (ok) GreenOk else RedErr) }
 
+        if (showMail) {
+            // 0. Quick Thunderbird Email Setup Wizard, .k9s Import & Runflare Preset
+            OutlinedButton(
+                onClick = onOpenEmailSetup,
+                modifier = Modifier.fillMaxWidth().testTag("settings_open_thunderbird")
+            ) {
+                Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("راه‌اندازی جادویی ایمیل ورودی و خروجی (سبک Thunderbird)")
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        val preset = EmailAutoconfig.runflarePreset(s.fromEmail)
+                        val emailUser = s.fromEmail.trim().ifBlank { s.smtpUser.ifBlank { s.imapUser } }
+                        val updated = s.copy(
+                            sendMode = "SMTP",
+                            smtpHost = preset.smtpHost,
+                            smtpPort = preset.smtpPort,
+                            smtpSecurity = preset.smtpSecurity,
+                            smtpUser = emailUser,
+                            imapHost = preset.imapHost,
+                            imapPort = preset.imapPort,
+                            imapSecurity = preset.imapSecurity,
+                            imapUser = emailUser,
+                            dkimSelector = s.dkimSelector.ifBlank { "runflare" }
+                        )
+                        s = updated
+                        syncNumberStrings(updated)
+                        saved = false
+                        k9Notice = true to "پریست Runflare اعمال شد (${ltrIsolate("smtp-ir-01.runflare.com")} • IMAP 993 / SMTP 465 SSL). رمز صندوق ایمیل را وارد کنید."
+                    },
+                    modifier = Modifier.weight(1f).testTag("settings_runflare_preset")
+                ) {
+                    Text("پریست Runflare")
+                }
+                OutlinedButton(
+                    onClick = { k9Picker.launch(arrayOf("*/*")) },
+                    modifier = Modifier.weight(1f).testTag("settings_import_k9s")
+                ) {
+                    Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("ورود فایل .k9s")
+                }
+            }
+            k9Notice?.let { (ok, msg) -> Chip(msg, if (ok) GreenOk else RedErr) }
+        }
+
+        if (showAi) {
         // 1. hcnsec API + Auto Strongest Model Probe
         Section(
             header = "۱. هوش مصنوعی hcnsec (حداکثر دقت و فروش)",
@@ -246,16 +305,19 @@ fun SettingsScreen(
             badge = if (s.hcnsModelVerified && s.hcnsModel.isNotBlank()) s.hcnsModel else if (s.hcnsKey.isNotBlank()) "کلید ثبت شد" else "نیاز به کلید",
             badgeColor = if (s.hcnsModelVerified) GreenOk else if (s.hcnsKey.isNotBlank()) OrangeWarn else RedErr
         ) {
-            LabeledField("کلید API سایت hcnsec (sk-...)", s.hcnsKey, isSecret = true, modifier = Modifier.testTag("settings_hcns_key")) {
+            LabeledField("کلید API سایت hcnsec (sk-...)", s.hcnsKey, isSecret = true, monospace = true, modifier = Modifier.testTag("settings_hcns_key")) {
                 s = s.copy(hcnsKey = it, hcnsModelVerified = false)
                 saved = false
             }
-            LabeledField("آدرس Endpoint", s.hcnsEndpoint, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)) {
+            LabeledField("آدرس Endpoint", s.hcnsEndpoint, monospace = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)) {
                 s = s.copy(hcnsEndpoint = it, hcnsModelVerified = false)
                 saved = false
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 FilterChip(
                     selected = s.autoSelectBestModel,
                     onClick = { s = s.copy(autoSelectBestModel = !s.autoSelectBestModel); saved = false },
@@ -300,7 +362,7 @@ fun SettingsScreen(
 
             hcnsStatus?.let { (ok, msg) -> Chip(msg, if (ok) GreenOk else RedErr) }
 
-            LabeledField("مدل فعال تولید متن", s.hcnsModel, placeholder = "با دکمه بالا خودکار انتخاب می‌شود") {
+            LabeledField("مدل فعال تولید متن", s.hcnsModel, monospace = true, placeholder = "با دکمه بالا خودکار انتخاب می‌شود") {
                 s = s.copy(hcnsModel = it)
                 saved = false
             }
@@ -329,6 +391,7 @@ fun SettingsScreen(
             LabeledField(
                 label = "حداکثر پاس کیفیت برای هر ایمیل (پیشنهاد ۳ برای بالاترین کیفیت)",
                 value = maxAiCallsStr,
+                monospace = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
             ) { raw ->
                 maxAiCallsStr = raw.filter { it.isDigit() }.take(1)
@@ -412,17 +475,18 @@ fun SettingsScreen(
             badge = if (s.youVerified) "متصل" else if (s.youKey.isNotBlank()) "ثبت‌شده" else "نیاز به کلید",
             badgeColor = if (s.youVerified) GreenOk else if (s.youKey.isNotBlank()) OrangeWarn else RedErr
         ) {
-            LabeledField("کلید API سایت You.com", s.youKey, isSecret = true, modifier = Modifier.testTag("settings_you_key")) {
+            LabeledField("کلید API سایت You.com", s.youKey, isSecret = true, monospace = true, modifier = Modifier.testTag("settings_you_key")) {
                 s = s.copy(youKey = it, youVerified = false)
                 saved = false
             }
-            LabeledField("Endpoint جستجو", s.youEndpoint, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)) {
+            LabeledField("Endpoint جستجو", s.youEndpoint, monospace = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)) {
                 s = s.copy(youEndpoint = it, youVerified = false)
                 saved = false
             }
             LabeledField(
                 label = "تعداد نتایج برای هر دامنه (۱ تا ۱۰)",
                 value = youCountStr,
+                monospace = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
             ) { raw ->
                 youCountStr = raw.filter { it.isDigit() }.take(2)
@@ -456,7 +520,9 @@ fun SettingsScreen(
             }
             youStatus?.let { (ok, msg) -> Chip(msg, if (ok) GreenOk else RedErr) }
         }
+        } // end showAi
 
+        if (showRules) {
         // 4. sitest Folder (Persistent SAF)
         Section(
             header = "۴. پوشه گزارش‌های sitest در حافظه گوشی",
@@ -478,7 +544,9 @@ fun SettingsScreen(
                 Text(if (s.sitestFolderUri.isBlank()) "انتخاب پوشه sitest" else "تغییر پوشه sitest")
             }
         }
+        } // end showRules
 
+        if (showMail) {
         // 5. Sender Identity & Mail Transport
         Section(
             header = "۵. هویت فرستنده و سرویس ارسال خروجی",
@@ -487,11 +555,11 @@ fun SettingsScreen(
             badgeColor = MaterialTheme.colorScheme.primary
         ) {
             LabeledField("نام نمایشی فرستنده", s.fromName) { s = s.copy(fromName = it); saved = false }
-            LabeledField("ایمیل فرستنده", s.fromEmail, placeholder = "security@yourdomain.com", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)) {
+            LabeledField("ایمیل فرستنده", s.fromEmail, monospace = true, placeholder = "security@yourdomain.com", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)) {
                 s = s.copy(fromEmail = it); saved = false
             }
-            LabeledField("Reply-To (اختیاری)", s.replyTo, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)) { s = s.copy(replyTo = it); saved = false }
-            LabeledField("Selector اختصاصی DKIM (اختیاری، مثلاً mail یا brevo1)", s.dkimSelector) {
+            LabeledField("Reply-To (اختیاری)", s.replyTo, monospace = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)) { s = s.copy(replyTo = it); saved = false }
+            LabeledField("Selector اختصاصی DKIM (اختیاری، مثلاً mail یا brevo1)", s.dkimSelector, monospace = true) {
                 s = s.copy(dkimSelector = it); saved = false
             }
             LabeledField("امضای انتهای ایمیل", s.signature, multiline = true) { s = s.copy(signature = it); saved = false }
@@ -499,7 +567,10 @@ fun SettingsScreen(
                 s = s.copy(unsubscribeFooter = it); saved = false
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 FilterChip(
                     selected = s.sendMode == "BREVO_API",
                     onClick = { s = s.copy(sendMode = "BREVO_API"); saved = false },
@@ -512,15 +583,16 @@ fun SettingsScreen(
                 )
             }
             if (s.sendMode == "BREVO_API") {
-                LabeledField("کلید Brevo API (xkeysib-...)", s.brevoKey, isSecret = true) {
+                LabeledField("کلید Brevo API (xkeysib-...)", s.brevoKey, isSecret = true, monospace = true) {
                     s = s.copy(brevoKey = it); saved = false
                 }
             } else {
-                LabeledField("SMTP Host", s.smtpHost, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)) { s = s.copy(smtpHost = it); saved = false }
+                LabeledField("SMTP Host", s.smtpHost, monospace = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)) { s = s.copy(smtpHost = it); saved = false }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     LabeledField(
                         "SMTP Port",
                         smtpPortStr,
+                        monospace = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(1f)
                     ) { raw ->
@@ -528,7 +600,10 @@ fun SettingsScreen(
                     }
                     Column(Modifier.weight(1.2f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         SubTitle("امنیت SMTP (پورت خودکار)")
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
                             FilterChip(
                                 selected = s.smtpSecurity == "STARTTLS",
                                 onClick = {
@@ -552,8 +627,8 @@ fun SettingsScreen(
                         }
                     }
                 }
-                LabeledField("نام کاربری SMTP (کامل با @)", s.smtpUser) { s = s.copy(smtpUser = it); saved = false }
-                LabeledField("رمز صندوق ایمیل / SMTP", s.smtpPass, isSecret = true) { s = s.copy(smtpPass = it); saved = false }
+                LabeledField("نام کاربری SMTP (کامل با @)", s.smtpUser, monospace = true) { s = s.copy(smtpUser = it); saved = false }
+                LabeledField("رمز صندوق ایمیل / SMTP", s.smtpPass, isSecret = true, monospace = true) { s = s.copy(smtpPass = it); saved = false }
                 if (s.smtpPass.isNotBlank() && s.imapPass != s.smtpPass) {
                     TextButton(onClick = {
                         s = s.copy(
@@ -570,6 +645,7 @@ fun SettingsScreen(
                 LabeledField(
                     "فاصله ارسال (ثانیه)",
                     delayStr,
+                    monospace = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f)
                 ) { raw ->
@@ -578,6 +654,7 @@ fun SettingsScreen(
                 LabeledField(
                     "نوسان تصادفی",
                     jitterStr,
+                    monospace = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f)
                 ) { raw ->
@@ -586,6 +663,7 @@ fun SettingsScreen(
                 LabeledField(
                     "سقف روزانه",
                     dailyCapStr,
+                    monospace = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f)
                 ) { raw ->
@@ -603,6 +681,7 @@ fun SettingsScreen(
                     LabeledField(
                         "شروع ساعت کاری (۰-۲۳)",
                         bizStartStr,
+                        monospace = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(1f)
                     ) { raw ->
@@ -611,6 +690,7 @@ fun SettingsScreen(
                     LabeledField(
                         "پایان ساعت کاری (۱-۲۴)",
                         bizEndStr,
+                        monospace = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(1f)
                     ) { raw ->
@@ -622,6 +702,7 @@ fun SettingsScreen(
                 LabeledField(
                     "یادآور پیگیری اول (روز)",
                     fu1Str,
+                    monospace = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f)
                 ) { raw ->
@@ -630,6 +711,7 @@ fun SettingsScreen(
                 LabeledField(
                     "یادآور پیگیری دوم (روز)",
                     fu2Str,
+                    monospace = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f)
                 ) { raw ->
@@ -637,36 +719,45 @@ fun SettingsScreen(
                 }
             }
         }
+        } // end showMail
 
+        if (showRules) {
         // 6. Attachment Policy
         Section(header = stringResource(R.string.policy_title), icon = Icons.Default.Security) {
             Chip(stringResource(R.string.policy_mandatory), GreenOk)
             LabeledField(
                 stringResource(R.string.policy_cap),
                 maxMbStr,
+                monospace = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
             ) { raw ->
                 maxMbStr = raw.filter { it.isDigit() }.take(1); saved = false
             }
             SubTitle(stringResource(R.string.policy_note))
         }
+        } // end showRules
 
+        if (showMail) {
         // 7. IMAP & Opt-out + Live Verifier
         Section(header = "۶. صندوق ورودی (IMAP) و تست اتصال ایمیل", icon = Icons.Default.MarkEmailRead) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                LabeledField("IMAP Host", s.imapHost, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.weight(2f)) {
+                LabeledField("IMAP Host", s.imapHost, monospace = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.weight(2f)) {
                     s = s.copy(imapHost = it); saved = false
                 }
                 LabeledField(
                     "Port",
                     imapPortStr,
+                    monospace = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f)
                 ) { raw ->
                     imapPortStr = raw.filter { it.isDigit() }.take(5); saved = false
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 FilterChip(
                     selected = s.imapSecurity == "SSL",
                     onClick = {
@@ -688,8 +779,8 @@ fun SettingsScreen(
                     label = { Text("STARTTLS (143)") }
                 )
             }
-            LabeledField("نام کاربری IMAP (کامل با @)", s.imapUser) { s = s.copy(imapUser = it); saved = false }
-            LabeledField("رمز صندوق ایمیل (IMAP Password)", s.imapPass, isSecret = true) {
+            LabeledField("نام کاربری IMAP (کامل با @)", s.imapUser, monospace = true) { s = s.copy(imapUser = it); saved = false }
+            LabeledField("رمز صندوق ایمیل (IMAP Password)", s.imapPass, isSecret = true, monospace = true) {
                 s = s.copy(imapPass = it); saved = false
             }
             if (s.sendMode == "SMTP" && s.imapPass.isNotBlank() && s.smtpPass != s.imapPass) {
@@ -730,10 +821,11 @@ fun SettingsScreen(
 
             val suppressedCount = s.suppressed.split(',').map { it.trim() }.filter { it.isNotEmpty() }.size
             SubTitle("$suppressedCount ایمیل/دامنه در لیست عدم ارسال (opt-out) ثبت شده است.")
-            LabeledField("لیست عدم ارسال (با کاما جدا کنید)", s.suppressed, multiline = true) {
+            LabeledField("لیست عدم ارسال (با کاما جدا کنید)", s.suppressed, multiline = true, monospace = true) {
                 s = s.copy(suppressed = it); saved = false
             }
         }
+        } // end showMail
 
         BigButton(
             text = "ذخیره دائمی همه تنظیمات و الگوها",
@@ -745,6 +837,7 @@ fun SettingsScreen(
         }
         if (saved) Chip("تنظیمات و الگوها با موفقیت رمزنگاری و ذخیره شد ✓", GreenOk)
 
+        if (showRules) {
         Section(header = "حریم خصوصی و پاکسازی", icon = Icons.Default.DeleteForever) {
             SubTitle("پاکسازی، همه پیام‌ها، لاگ‌ها، کلیدهای API، الگوها و تنظیمات ذخیره شده را از دستگاه حذف می‌کند.")
             OutlinedButton(
@@ -756,6 +849,7 @@ fun SettingsScreen(
             }
             if (erased) Chip("همه داده‌های محلی پاک شد ✓", GreenOk)
         }
+        } // end showRules
 
         TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("بازگشت") }
         Spacer(Modifier.height(8.dp))

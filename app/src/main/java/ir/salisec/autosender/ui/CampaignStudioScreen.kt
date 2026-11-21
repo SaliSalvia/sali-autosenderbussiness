@@ -1,5 +1,7 @@
 package ir.salisec.autosender.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
@@ -10,6 +12,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -38,11 +41,14 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FilterListOff
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.UploadFile
@@ -733,10 +739,11 @@ fun CampaignStudioScreen(
         }
 
         if (step == 0) {
+            val uniqueDomainCount = remember(contacts) { contacts.map { it.domain }.distinct().size }
             Section(
                 header = "ورود گروهی آدرس ایمیل‌ها (هر سطر یک ایمیل)",
                 icon = Icons.Default.Email,
-                badge = if (contacts.isNotEmpty()) "${contacts.size} ایمیل" else null,
+                badge = if (contacts.isNotEmpty()) "${contacts.size} ایمیل • $uniqueDomainCount دامنه" else null,
                 badgeColor = GreenOk
             ) {
                 SubTitle("آدرس‌های ایمیل هدف را به صورت گروهی (هر ایمیل در یک سطر) اینجا وارد یا Paste کنید؛ همچنین فرمت CSV یا ورود از فایل پشتیبانی می‌شود.")
@@ -746,10 +753,11 @@ fun CampaignStudioScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("campaign_emails_input"),
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily, fontSize = 13.sp),
                     placeholder = {
                         Text(
                             "ceo@inchand.com\ninfo@numberland.ir\nsalar@example.com",
-                            style = MaterialTheme.typography.bodySmall
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFontFamily)
                         )
                     },
                     minLines = 6,
@@ -760,10 +768,27 @@ fun CampaignStudioScreen(
                         unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
                     )
                 )
-                Row(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    OutlinedButton(
+                        onClick = {
+                            val cm = context.getSystemService(ClipboardManager::class.java)
+                            val pasted = cm?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty().trim()
+                            if (pasted.isNotBlank()) {
+                                val currentText = app.session.rawEmailsInput.value.trim()
+                                app.session.rawEmailsInput.value = if (currentText.isBlank()) pasted else "$currentText\n$pasted"
+                            } else {
+                                scanError = "کلیپ‌بورد خالی است یا متن معتبری ندارد."
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("الصاق از کلیپ‌بورد")
+                    }
                     OutlinedButton(
                         onClick = {
                             filePicker.launch(
@@ -775,12 +800,11 @@ fun CampaignStudioScreen(
                                     "text/comma-separated-values"
                                 )
                             )
-                        },
-                        modifier = Modifier.weight(1f)
+                        }
                     ) {
                         Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("بارگذاری فایل TXT / CSV")
+                        Text("فایل TXT / CSV")
                     }
                     if (rawInput.isNotBlank()) {
                         TextButton(onClick = {
@@ -892,18 +916,31 @@ fun CampaignStudioScreen(
                             }
                         }
 
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            filteredMatches.forEach { m ->
-                                MatchCard(
-                                    m = m,
-                                    checked = selected.contains(m.key),
-                                    onOpenPdf = { uri -> openPdfPreview(uri) },
-                                    onToggle = { chk ->
-                                        val next = app.session.selected.value.toMutableSet()
-                                        if (chk) next.add(m.key) else next.remove(m.key)
-                                        app.session.selected.value = next
-                                    }
-                                )
+                        if (filteredMatches.isEmpty()) {
+                            EmptyStateCard(
+                                icon = Icons.Default.FilterListOff,
+                                title = "دامنه‌ای با این فیلتر پیدا نشد",
+                                subtitle = "فیلتر یا عبارت جستجو را تغییر دهید.",
+                                actionLabel = "نمایش همه دامنه‌ها",
+                                onAction = {
+                                    matchFilter = "ALL"
+                                    matchSearch = ""
+                                }
+                            )
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                filteredMatches.forEach { m ->
+                                    MatchCard(
+                                        m = m,
+                                        checked = selected.contains(m.key),
+                                        onOpenPdf = { uri -> openPdfPreview(uri) },
+                                        onToggle = { chk ->
+                                            val next = app.session.selected.value.toMutableSet()
+                                            if (chk) next.add(m.key) else next.remove(m.key)
+                                            app.session.selected.value = next
+                                        }
+                                    )
+                                }
                             }
                         }
                     } else if (contacts.isEmpty()) {
@@ -1035,52 +1072,71 @@ fun CampaignStudioScreen(
                 }
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                visibleDrafts.forEach { item ->
-                    DraftReviewCard(
-                        item = item,
-                        approving = approvingKeys.contains(item.key),
-                        refreshingContext = refreshingDomains.contains(item.domain),
-                        companySummary = contextsMap[item.domain]?.summary.orEmpty(),
-                        onStyle = { st -> updateDraft(item.key) { it.copy(style = st) } },
-                        onSubject = { v ->
-                            updateDraft(item.key) { d ->
-                                val altIdx = d.subjectAlternatives.indexOf(v)
-                                val variant = if (altIdx >= 0) "ALT_${altIdx + 1}" else "CUSTOM"
-                                d.copy(subject = v, subjectVariant = variant)
+            if (visibleDrafts.isEmpty()) {
+                EmptyStateCard(
+                    icon = Icons.Default.FilterListOff,
+                    title = "پیش‌نویسی با این فیلتر پیدا نشد",
+                    subtitle = "فیلتر یا عبارت جستجو را پاک کنید تا همه پیش‌نویس‌های کمپین نمایش داده شوند.",
+                    actionLabel = "نمایش همه پیش‌نویس‌ها",
+                    onAction = {
+                        draftFilter = "ALL"
+                        draftSearch = ""
+                    }
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    visibleDrafts.forEach { item ->
+                        DraftReviewCard(
+                            item = item,
+                            approving = approvingKeys.contains(item.key),
+                            refreshingContext = refreshingDomains.contains(item.domain),
+                            companySummary = contextsMap[item.domain]?.summary.orEmpty(),
+                            onStyle = { st -> updateDraft(item.key) { it.copy(style = st) } },
+                            onSubject = { v ->
+                                updateDraft(item.key) { d ->
+                                    val altIdx = d.subjectAlternatives.indexOf(v)
+                                    val variant = if (altIdx >= 0) "ALT_${altIdx + 1}" else "CUSTOM"
+                                    d.copy(subject = v, subjectVariant = variant)
+                                }
+                            },
+                            onSelectAlternative = { idx, alt ->
+                                updateDraft(item.key) { it.copy(subject = alt, subjectVariant = "ALT_${idx + 1}") }
+                            },
+                            onPreheader = { v -> updateDraft(item.key) { it.copy(preheader = v) } },
+                            onBody = { v -> updateDraft(item.key) { it.copy(body = v) } },
+                            onOpenPdf = { uri -> openPdfPreview(uri) },
+                            onRefreshContext = { refreshCompanyContext(item.domain) },
+                            onCopyDraft = {
+                                val cm = context.getSystemService(ClipboardManager::class.java)
+                                val textToCopy = "موضوع: ${item.subject}\n\n${item.body}".trim()
+                                cm?.setPrimaryClip(ClipData.newPlainText("Email Draft", textToCopy))
+                                testNotice = "متن ایمیل ${ltrIsolate(item.domain)} در کلیپ‌بورد کپی شد ✓"
+                            },
+                            onPreviewHtml = { previewHtmlItem = item },
+                            onSendTestToSelf = {
+                                scope.launch {
+                                    genError = null
+                                    testNotice = null
+                                    val res = app.engine.sendTestToSelf(
+                                        subject = item.subject,
+                                        preheader = item.preheader,
+                                        body = item.body,
+                                        attachmentUris = item.match.attachmentUris,
+                                        attachmentNames = item.match.attachmentNames
+                                    )
+                                    res.onSuccess { testNotice = it }
+                                        .onFailure { genError = "خطای ارسال تست: ${it.message?.take(140)}" }
+                                }
+                            },
+                            onRegenerate = { generateBatch(listOf(item.key)) },
+                            onApprove = {
+                                scope.launch {
+                                    val err = approveSingleDraft(item)
+                                    if (err != null) genError = err
+                                }
                             }
-                        },
-                        onSelectAlternative = { idx, alt ->
-                            updateDraft(item.key) { it.copy(subject = alt, subjectVariant = "ALT_${idx + 1}") }
-                        },
-                        onPreheader = { v -> updateDraft(item.key) { it.copy(preheader = v) } },
-                        onBody = { v -> updateDraft(item.key) { it.copy(body = v) } },
-                        onOpenPdf = { uri -> openPdfPreview(uri) },
-                        onRefreshContext = { refreshCompanyContext(item.domain) },
-                        onPreviewHtml = { previewHtmlItem = item },
-                        onSendTestToSelf = {
-                            scope.launch {
-                                genError = null
-                                testNotice = null
-                                val res = app.engine.sendTestToSelf(
-                                    subject = item.subject,
-                                    preheader = item.preheader,
-                                    body = item.body,
-                                    attachmentUris = item.match.attachmentUris,
-                                    attachmentNames = item.match.attachmentNames
-                                )
-                                res.onSuccess { testNotice = it }
-                                    .onFailure { genError = "خطای ارسال تست: ${it.message?.take(140)}" }
-                            }
-                        },
-                        onRegenerate = { generateBatch(listOf(item.key)) },
-                        onApprove = {
-                            scope.launch {
-                                val err = approveSingleDraft(item)
-                                if (err != null) genError = err
-                            }
-                        }
-                    )
+                        )
+                    }
                 }
             }
 
@@ -1226,6 +1282,7 @@ private fun DraftReviewCard(
     onBody: (String) -> Unit,
     onOpenPdf: (String) -> Unit,
     onRefreshContext: () -> Unit,
+    onCopyDraft: () -> Unit,
     onPreviewHtml: () -> Unit,
     onSendTestToSelf: () -> Unit,
     onRegenerate: () -> Unit,
@@ -1234,18 +1291,19 @@ private fun DraftReviewCard(
     var expanded by remember(item.key, item.generated) { mutableStateOf(!item.approved) }
     var summaryExpanded by remember(item.key) { mutableStateOf(false) }
     val report = item.match.report
+    val borderColor by animateColorAsState(
+        targetValue = when {
+            item.approved -> GreenOk.copy(alpha = 0.6f)
+            item.error != null -> RedErr.copy(alpha = 0.6f)
+            else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+        },
+        label = "draft_border"
+    )
 
     Surface(
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(
-            1.dp,
-            when {
-                item.approved -> GreenOk.copy(alpha = 0.55f)
-                item.error != null -> RedErr.copy(alpha = 0.55f)
-                else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
-            }
-        ),
+        border = BorderStroke(1.dp, borderColor),
         tonalElevation = 1.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -1432,6 +1490,9 @@ private fun DraftReviewCard(
                     }
 
                     LabeledField("موضوع ایمیل (Subject)", item.subject, onChange = onSubject)
+                    if (item.subject.isNotBlank()) {
+                        SubTitle("طول موضوع: ${item.subject.length} کاراکتر (پیشنهاد ۲۵ تا ۵۲)")
+                    }
 
                     if (item.subjectAlternatives.isNotEmpty()) {
                         FlowRow(
@@ -1449,7 +1510,14 @@ private fun DraftReviewCard(
                     }
 
                     LabeledField("پیش‌نمایش ایمیل (Preheader)", item.preheader, onChange = onPreheader)
+                    if (item.preheader.isNotBlank()) {
+                        SubTitle("طول Preheader: ${item.preheader.length} کاراکتر (پیشنهاد زیر ۹۰)")
+                    }
                     LabeledField("متن ایمیل بازاریابی", item.body, multiline = true, onChange = onBody)
+                    if (item.body.isNotBlank()) {
+                        val words = item.body.trim().split(Regex("""\s+""")).count { it.isNotBlank() }
+                        SubTitle("تعداد کلمات متن: $words کلمه")
+                    }
 
                     if (item.generated) {
                         item.quality.blockers.forEach { SubTitle("⛔ $it", color = RedErr) }
@@ -1457,25 +1525,25 @@ private fun DraftReviewCard(
                     }
 
                     if (item.generated && item.subject.isNotBlank() && item.body.isNotBlank()) {
-                        Row(
+                        FlowRow(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            OutlinedButton(
-                                onClick = onPreviewHtml,
-                                modifier = Modifier.weight(1f)
-                            ) {
+                            OutlinedButton(onClick = onPreviewHtml) {
                                 Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(4.dp))
                                 Text("پیش‌نمایش HTML", fontSize = 12.sp)
                             }
-                            OutlinedButton(
-                                onClick = onSendTestToSelf,
-                                modifier = Modifier.weight(1f)
-                            ) {
+                            OutlinedButton(onClick = onSendTestToSelf) {
                                 Icon(Icons.AutoMirrored.Filled.ForwardToInbox, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(4.dp))
                                 Text("تست به خودم", fontSize = 12.sp)
+                            }
+                            OutlinedButton(onClick = onCopyDraft) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("کپی متن", fontSize = 12.sp)
                             }
                         }
                     }

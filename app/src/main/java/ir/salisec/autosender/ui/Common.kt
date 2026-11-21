@@ -1,10 +1,11 @@
 package ir.salisec.autosender.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,11 +17,12 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -30,6 +32,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -43,12 +46,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -61,19 +66,33 @@ fun ScreenScaffold(
     scrollable: Boolean = true,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    val base = Modifier
-        .fillMaxSize()
-        .background(MaterialTheme.colorScheme.background)
-    val mod = if (scrollable) {
-        base.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 14.dp)
-    } else {
-        base.padding(horizontal = 16.dp, vertical = 14.dp)
-    }
-    Column(
-        modifier = mod,
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentAlignment = Alignment.TopCenter
     ) {
-        content()
+        val horizontalPad = if (maxWidth >= 600.dp) 24.dp else 16.dp
+        val scrollMod = if (scrollable) {
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+        } else {
+            Modifier.fillMaxSize()
+        }
+        Box(
+            modifier = scrollMod,
+            contentAlignment = Alignment.TopCenter
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 720.dp)
+                    .padding(horizontal = horizontalPad, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                content = content
+            )
+        }
     }
 }
 
@@ -84,9 +103,11 @@ fun HeroBanner(
 ) {
     val c1 = MaterialTheme.colorScheme.primaryContainer
     val c2 = MaterialTheme.colorScheme.surface
+    val accent = MaterialTheme.colorScheme.primary
+    val secAccent = MaterialTheme.colorScheme.secondary
     Surface(
         shape = RoundedCornerShape(24.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.28f)),
         tonalElevation = 2.dp,
         modifier = modifier.fillMaxWidth()
     ) {
@@ -94,9 +115,24 @@ fun HeroBanner(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Brush.linearGradient(listOf(c1, c2)))
-                .padding(20.dp)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
+            Canvas(modifier = Modifier.matchParentSize()) {
+                drawCircle(
+                    color = accent.copy(alpha = 0.08f),
+                    radius = size.minDimension * 0.65f,
+                    center = Offset(x = size.width * 0.08f, y = size.height * 0.15f)
+                )
+                drawCircle(
+                    color = secAccent.copy(alpha = 0.06f),
+                    radius = size.minDimension * 0.45f,
+                    center = Offset(x = size.width * 0.92f, y = size.height * 0.85f)
+                )
+            }
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(11.dp),
+                content = content
+            )
         }
     }
 }
@@ -146,9 +182,9 @@ fun Section(
                 if (icon != null) {
                     Box(
                         modifier = Modifier
-                            .size(32.dp)
+                            .size(34.dp)
                             .clip(RoundedCornerShape(10.dp))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.13f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
@@ -175,6 +211,67 @@ fun Section(
 }
 
 @Composable
+fun EmptyStateCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null
+) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        tonalElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+            if (!actionLabel.isNullOrBlank() && onAction != null) {
+                OutlinedButton(
+                    onClick = onAction,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.minimumInteractiveComponentSize()
+                ) {
+                    Text(actionLabel)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun LabeledField(
     label: String,
     value: String,
@@ -182,11 +279,17 @@ fun LabeledField(
     singleLine: Boolean = !multiline,
     placeholder: String = "",
     isSecret: Boolean = false,
+    monospace: Boolean = false,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     modifier: Modifier = Modifier,
     onChange: (String) -> Unit
 ) {
     var secretVisible by remember(isSecret) { mutableStateOf(false) }
+    val textStyle = if (monospace) {
+        MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily, fontSize = 13.sp)
+    } else {
+        MaterialTheme.typography.bodyMedium
+    }
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
             label,
@@ -197,8 +300,18 @@ fun LabeledField(
             value = value,
             onValueChange = onChange,
             modifier = Modifier.fillMaxWidth(),
+            textStyle = textStyle,
             placeholder = if (placeholder.isNotBlank()) {
-                { Text(placeholder, style = MaterialTheme.typography.bodySmall) }
+                {
+                    Text(
+                        placeholder,
+                        style = if (monospace) {
+                            MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFontFamily)
+                        } else {
+                            MaterialTheme.typography.bodySmall
+                        }
+                    )
+                }
             } else null,
             minLines = if (multiline) 3 else 1,
             maxLines = if (multiline) 10 else 1,
@@ -296,7 +409,7 @@ fun Chip(
         Surface(
             onClick = onClick,
             shape = RoundedCornerShape(50),
-            color = color.copy(alpha = 0.14f),
+            color = color.copy(alpha = 0.13f),
             border = BorderStroke(1.dp, color.copy(alpha = 0.30f)),
             modifier = modifier,
             content = content
@@ -304,7 +417,7 @@ fun Chip(
     } else {
         Surface(
             shape = RoundedCornerShape(50),
-            color = color.copy(alpha = 0.14f),
+            color = color.copy(alpha = 0.13f),
             border = BorderStroke(1.dp, color.copy(alpha = 0.30f)),
             modifier = modifier,
             content = content
@@ -317,6 +430,7 @@ fun LoadingBox(text: String = "لطفاً صبر کنید...") {
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(

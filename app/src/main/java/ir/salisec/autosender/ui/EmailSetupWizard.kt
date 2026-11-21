@@ -6,6 +6,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -59,6 +61,7 @@ import kotlinx.coroutines.withContext
  *  - Also lets user choose Brevo API for high-deliverability outgoing + IMAP for incoming replies
  *  - Tests live login to BOTH Incoming and Outgoing before saving encrypted credentials
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun EmailSetupWizard(
     app: App,
@@ -224,6 +227,7 @@ fun EmailSetupWizard(
                 label = "آدرس ایمیل شما (Email Address)",
                 value = email,
                 singleLine = true,
+                monospace = true,
                 placeholder = "security@yourdomain.ir",
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                 modifier = Modifier.testTag("wizard_email_input")
@@ -239,11 +243,15 @@ fun EmailSetupWizard(
                 value = password,
                 singleLine = true,
                 isSecret = true,
+                monospace = true,
                 modifier = Modifier.testTag("wizard_password_input")
             ) { password = it }
 
             SubTitle("روش ارسال خروجی (Outgoing):")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 FilterChip(
                     selected = sendMode == "SMTP",
                     onClick = { sendMode = "SMTP" },
@@ -261,7 +269,8 @@ fun EmailSetupWizard(
                     label = "کلید Brevo API (xkeysib-...)",
                     value = brevoKey,
                     singleLine = true,
-                    isSecret = true
+                    isSecret = true,
+                    monospace = true
                 ) { brevoKey = it }
             }
 
@@ -356,12 +365,15 @@ fun EmailSetupWizard(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("سرور ورودی (IMAP - برای دریافت پاسخ مشتریان و Bounce)", style = MaterialTheme.typography.labelLarge)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        LabeledField("IMAP Host", imapHost, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.weight(2f)) { imapHost = it }
-                        LabeledField("Port", imapPort, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f)) { raw ->
+                        LabeledField("IMAP Host", imapHost, singleLine = true, monospace = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.weight(2f)) { imapHost = it }
+                        LabeledField("Port", imapPort, singleLine = true, monospace = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f)) { raw ->
                             imapPort = raw.filter { it.isDigit() }.take(5)
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         listOf("SSL" to "SSL/TLS (993)", "STARTTLS" to "STARTTLS (143)").forEach { (sec, lbl) ->
                             FilterChip(
                                 selected = imapSecurity == sec,
@@ -375,17 +387,20 @@ fun EmailSetupWizard(
                             )
                         }
                     }
-                    LabeledField("نام کاربری IMAP", imapUser, singleLine = true) { imapUser = it }
+                    LabeledField("نام کاربری IMAP", imapUser, singleLine = true, monospace = true) { imapUser = it }
 
                     if (sendMode == "SMTP") {
                         Text("سرور خروجی (SMTP)", style = MaterialTheme.typography.labelLarge)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            LabeledField("SMTP Host", smtpHost, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.weight(2f)) { smtpHost = it }
-                            LabeledField("Port", smtpPort, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f)) { raw ->
+                            LabeledField("SMTP Host", smtpHost, singleLine = true, monospace = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.weight(2f)) { smtpHost = it }
+                            LabeledField("Port", smtpPort, singleLine = true, monospace = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f)) { raw ->
                                 smtpPort = raw.filter { it.isDigit() }.take(5)
                             }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
                             listOf("STARTTLS" to "STARTTLS (587)", "SSL" to "SSL/TLS (465)").forEach { (sec, lbl) ->
                                 FilterChip(
                                     selected = smtpSecurity == sec,
@@ -399,7 +414,7 @@ fun EmailSetupWizard(
                                 )
                             }
                         }
-                        LabeledField("نام کاربری SMTP", smtpUser, singleLine = true) { smtpUser = it }
+                        LabeledField("نام کاربری SMTP", smtpUser, singleLine = true, monospace = true) { smtpUser = it }
                     }
                 }
             }
