@@ -233,7 +233,7 @@ jobs:
       contents: write
     steps:
       - name: Download validated signed artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: SaliBussiness-APK
           path: dist
