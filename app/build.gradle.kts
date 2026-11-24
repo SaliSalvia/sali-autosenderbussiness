@@ -107,7 +107,7 @@ dependencies {
 
     // Pure-JVM unit tests for domain logic. No emulator needed in CI.
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20240303")
+    testImplementation("org.json:json:20260814")
 }
 
 tasks.register<JacocoReport>("jacocoTestReport") {
